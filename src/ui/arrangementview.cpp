@@ -212,12 +212,17 @@ public:
          * the per-region preamble runs anyway -- skipping at the lane
          * level kills the whole branch. */
         const auto laneClip = g.getClipBounds();
+        int laneY = kRulerH;   // accumulate full heights -- variable per lane
         for (int i = 0; i < laneCount; ++i)
         {
-            const int laneY = kRulerH + i * kLaneH;
-            if (laneClip.getBottom() <= laneY || laneClip.getY() >= laneY + kLaneH)
+            const int fullH = laneFullHeight (i);
+            if (laneClip.getBottom() <= laneY || laneClip.getY() >= laneY + fullH)
+            {
+                laneY += fullH;
                 continue;
+            }
             paintLane (g, i);
+            laneY += fullH;
         }
 
         if (laneCount == 0)
@@ -239,7 +244,7 @@ public:
             const int xs = kLabelW + (int) (rangeStart_ * kPxPerBeat);
             const int xe = kLabelW + (int) (rangeEnd_   * kPxPerBeat);
             const int w  = juce::jmax (1, xe - xs);
-            const int yLanes = kRulerH + juce::jmax (1, laneCount) * kLaneH;
+            const int yLanes = kRulerH + juce::jmax (kLaneH, totalLanesHeight());
 
             const juce::Colour fillCol = loopActive_
                 ? juce::Colour::fromRGBA (90, 180, 110, 50)
@@ -268,11 +273,16 @@ public:
 
         if (dropHover_)
         {
+            /* Both branches now route through the cumulative-offset helpers,
+             * which also restores the kRulerH origin the old hand-rolled
+             * `idx * kLaneH` form dropped -- the hover band sat one ruler-
+             * height too high before (transient drag feedback, so it never
+             * affected the static lane layout). */
             const Rectangle<int> hover = dropHoverLaneIdx_ >= 0
-                ? Rectangle<int> (kLabelW, dropHoverLaneIdx_ * kLaneH,
-                                   getWidth() - kLabelW, kLaneH)
-                : Rectangle<int> (kLabelW, laneCount * kLaneH,
-                                   getWidth() - kLabelW, kLaneH);
+                ? Rectangle<int> (kLabelW, laneClipTopY (dropHoverLaneIdx_),
+                                   getWidth() - kLabelW, laneClipStripH())
+                : Rectangle<int> (kLabelW, kRulerH + totalLanesHeight(),
+                                   getWidth() - kLabelW, laneClipStripH());
             g.setColour (Colours::limegreen.withAlpha (0.18f));
             g.fillRect (hover);
             g.setColour (Colours::limegreen);
@@ -286,16 +296,17 @@ public:
         {
             if (laneDragSource_ >= 0 && laneDragSource_ < laneCount)
             {
-                const int y = kRulerH + laneDragSource_ * kLaneH;
+                const int y = laneClipTopY (laneDragSource_);
                 g.setColour (juce::Colours::black.withAlpha (0.30f));
-                g.fillRect (0, y, kLabelW, kLaneH);
+                g.fillRect (0, y, kLabelW, laneFullHeight (laneDragSource_));
             }
             if (laneDragHoverIdx_ >= 0 && laneDragHoverIdx_ < laneCount
                 && laneDragHoverIdx_ != laneDragSource_)
             {
-                const int y = kRulerH + laneDragHoverIdx_ * kLaneH;
+                const int y = laneClipTopY (laneDragHoverIdx_);
                 const bool dropOnTop = (laneDragHoverIdx_ < laneDragSource_);
-                const int yLine = dropOnTop ? y : y + kLaneH - 2;
+                const int yLine = dropOnTop ? y
+                                            : y + laneFullHeight (laneDragHoverIdx_) - 2;
                 g.setColour (juce::Colour { 0xff'ff'a0'40 });
                 g.fillRect (0, yLine, getWidth(), 2);
             }
@@ -333,8 +344,8 @@ public:
                 const double newPos = juce::jmax (0.0, mb.originalPos + gesture_.appliedDelta);
                 const int xs = kLabelW + (int) (newPos * kPxPerBeat);
                 const int xe = kLabelW + (int) ((newPos + mb.originalLen) * kPxPerBeat);
-                const int yT = kRulerH + destLaneIdx * kLaneH + 4;
-                const Rectangle<int> ghost (xs, yT, juce::jmax (2, xe - xs), kLaneH - 8);
+                const int yT = laneClipTopY (destLaneIdx) + 4;
+                const Rectangle<int> ghost (xs, yT, juce::jmax (2, xe - xs), laneClipStripH() - 8);
 
                 g.setColour (fillCol);
                 g.fillRect (ghost);
@@ -558,7 +569,7 @@ public:
         }
         if (e.y < kRulerH) return;   /* ruler click in label gutter */
 
-        const int laneIdx = (e.y - kRulerH) / kLaneH;
+        const int laneIdx = rowAtY (e.y);
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
         auto& lane    = owner.lanes_.getReference (laneIdx);
         auto& runtime = owner.laneRuntime_.getReference (laneIdx);
@@ -1011,11 +1022,11 @@ public:
     Rectangle<int> regionBodyRect (int laneIdx, const Region& r) const noexcept
     {
         constexpr int kTitleH = 13;
-        const int laneTopY = kRulerH + laneIdx * kLaneH;
+        const int laneTopY = laneClipTopY (laneIdx);
         const int xs = kLabelW + (int) (r.positionBeats * kPxPerBeat);
         const int ws = juce::jmax (4, (int) (r.lengthBeats * kPxPerBeat));
         const int innerTopY = laneTopY + 4 + kTitleH;
-        const int innerH    = juce::jmax (1, kLaneH - 8 - kTitleH);
+        const int innerH    = juce::jmax (1, laneClipStripH() - 8 - kTitleH);
         return Rectangle<int> (xs, innerTopY, ws, innerH).reduced (3, 2);
     }
 
@@ -1206,7 +1217,7 @@ public:
     void mouseDoubleClick (const MouseEvent& e) override
     {
         if (e.y < kRulerH) return;
-        const int laneIdx = (e.y - kRulerH) / kLaneH;
+        const int laneIdx = rowAtY (e.y);
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
         const auto& runtime = owner.laneRuntime_.getReference (laneIdx);
 
@@ -1912,7 +1923,7 @@ public:
             setMouseCursor (juce::MouseCursor::NormalCursor);
             return;
         }
-        const int laneIdx = (e.y - kRulerH) / kLaneH;
+        const int laneIdx = rowAtY (e.y);
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size())
         {
             setMouseCursor (juce::MouseCursor::NormalCursor);
@@ -1924,19 +1935,19 @@ public:
             return;
         }
         const auto& lane = owner.lanes_.getReference (laneIdx);
-        const int laneTopY = kRulerH + laneIdx * kLaneH;
+        const int laneTopY = laneClipTopY (laneIdx);
         for (const auto& r : lane.playlist.regions())
         {
             const int regionStartX = kLabelW + (int) (r.positionBeats * kPxPerBeat);
             const int regionEndX   = kLabelW + (int) (r.endBeats()    * kPxPerBeat);
             if (e.x >= regionEndX - kEdgeHandlePx && e.x <= regionEndX
-                && e.y >= laneTopY && e.y < laneTopY + kLaneH)
+                && e.y >= laneTopY && e.y < laneTopY + laneClipStripH())
             {
                 setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
                 return;
             }
             if (e.x >= regionStartX && e.x < regionEndX
-                && e.y >= laneTopY && e.y < laneTopY + kLaneH)
+                && e.y >= laneTopY && e.y < laneTopY + laneClipStripH())
             {
                 setMouseCursor (juce::MouseCursor::DraggingHandCursor);
                 return;
@@ -2369,8 +2380,7 @@ public:
      *  strips (above the ruler or past the last lane). */
     int yToLaneIdx (int y) const noexcept
     {
-        if (y < kRulerH) return -1;
-        const int idx = (y - kRulerH) / kLaneH;
+        const int idx = rowAtY (y);
         if (idx < 0 || idx >= owner.lanes_.size()) return -1;
         return idx;
     }
@@ -2726,10 +2736,9 @@ public:
             (double) (rect.getX()     - kLabelW) / (double) kPxPerBeat);
         const double beatHi = juce::jmax (0.0,
             (double) (rect.getRight() - kLabelW) / (double) kPxPerBeat);
-        const int laneLo = juce::jmax (0,
-            (rect.getY()      - kRulerH) / kLaneH);
+        const int laneLo = juce::jmax (0, rowAtY (rect.getY()));
         const int laneHi = juce::jmin (owner.lanes_.size() - 1,
-            (rect.getBottom() - kRulerH) / kLaneH);
+                                       rowAtY (rect.getBottom()));
 
         for (int li = laneLo; li <= laneHi; ++li)
         {
@@ -3622,7 +3631,7 @@ public:
          * lane at the very bottom never reaches a position where its
          * top edge is below the sticky ruler band. */
         const int h = kRulerH
-                       + juce::jmax (kLaneH, owner.lanes_.size() * kLaneH)
+                       + juce::jmax (kLaneH, totalLanesHeight())
                        + kRulerH;
         if (w != getWidth() || h != getHeight())
             setSize (w, h);
@@ -3633,7 +3642,7 @@ public:
     void repaintLane (int idx)
     {
         if (idx < 0) { repaint(); return; }
-        repaint (0, kRulerH + idx * kLaneH, getWidth(), kLaneH);
+        repaint (0, laneClipTopY (idx), getWidth(), laneFullHeight (idx));
     }
 
     void repaintPlayhead (int oldPxX, int newPxX)
@@ -3685,6 +3694,79 @@ public:
      * survive across multiple lane-add cycles without reload. */
     static constexpr int kThumbnailSamplesPerPixel = 1024;
     static constexpr int kThumbnailCacheEntries    = 256;
+
+    //==========================================================================
+    //  Variable-row vertical layout
+    //
+    //  Lanes were laid on a UNIFORM grid: laneY = kRulerH + i*kLaneH.  That
+    //  breaks once a lane can expand to host automation overlay sub-rows of
+    //  its own (Layer 3), because lane heights then differ.  These helpers
+    //  replace the uniform i*kLaneH arithmetic with a cumulative-offset model:
+    //  every "top of lane i" / "lane index at y" / "total height" computation
+    //  walks per-lane heights instead of multiplying by a constant.
+    //
+    //  Until overlay rendering lands (step 2), overlayStackHeight() returns 0,
+    //  so laneFullHeight()==kLaneH for every lane and the geometry is
+    //  bit-identical to the old uniform grid -- this step is behaviour-
+    //  preserving by construction.
+    //
+    //  Vocabulary:
+    //    clip strip  -- the kLaneH-tall top band of a lane that holds its
+    //                   regions/waveform + label.  Always kLaneH; overlays
+    //                   never push into it.
+    //    full height -- clip strip + the lane's expanded overlay sub-rows.
+    //==========================================================================
+
+    /** Pixel height of the region/waveform clip strip at the top of every
+     *  lane.  Constant (the zoomable kLaneH); overlays stack below it. */
+    int laneClipStripH() const noexcept { return kLaneH; }
+
+    /** Summed pixel height of lane `i`'s EXPANDED automation overlay
+     *  sub-rows.  Returns 0 until Layer 3 step 2 wires overlay rendering;
+     *  this is the single seam where variable-row height enters the model. */
+    int overlayStackHeight (int /*laneIdx*/) const noexcept { return 0; }
+
+    /** Total vertical extent of lane `i` = clip strip + expanded overlays. */
+    int laneFullHeight (int laneIdx) const noexcept
+    {
+        return kLaneH + overlayStackHeight (laneIdx);
+    }
+
+    /** Body-coord Y of the top of lane `i`'s clip strip = ruler height plus
+     *  the cumulative full height of all preceding lanes.  Equals the old
+     *  kRulerH + i*kLaneH while no lane is expanded. */
+    int laneClipTopY (int laneIdx) const noexcept
+    {
+        int y = kRulerH;
+        for (int j = 0; j < laneIdx; ++j) y += laneFullHeight (j);
+        return y;
+    }
+
+    /** Summed full height of all lanes (excludes the ruler row). */
+    int totalLanesHeight() const noexcept
+    {
+        int h = 0;
+        for (int i = 0; i < owner.lanes_.size(); ++i) h += laneFullHeight (i);
+        return h;
+    }
+
+    /** Lane index whose full extent contains body-coord `y`.  Returns -1 for
+     *  y above the lane area (in/above the ruler) and lanes_.size() for y
+     *  below the last lane, so existing `< 0 || >= size` range checks keep
+     *  working unchanged.  Replaces the old (y - kRulerH) / kLaneH. */
+    int rowAtY (int y) const noexcept
+    {
+        if (y < kRulerH) return -1;
+        int top = kRulerH;
+        const int n = owner.lanes_.size();
+        for (int i = 0; i < n; ++i)
+        {
+            const int h = laneFullHeight (i);
+            if (y < top + h) return i;
+            top += h;
+        }
+        return n;   // past the last lane -- callers range-check
+    }
 
 private:
     /** Paint the bars:beats ruler row.  rulerY is the body-coord Y
@@ -3909,9 +3991,8 @@ private:
         const auto& markers = owner.markerTrack_.markers();
         if (markers.empty()) return;
 
-        const int laneCount = owner.lanes_.size();
         const int yTop      = kRulerH;
-        const int yBot      = kRulerH + juce::jmax (1, laneCount) * kLaneH;
+        const int yBot      = kRulerH + juce::jmax (kLaneH, totalLanesHeight());
 
         const auto clip = g.getClipBounds();
         if (clip.getBottom() <= yTop) return;
@@ -3970,20 +4051,20 @@ private:
 
     Rectangle<int> armToggleRect (int laneIdx) const noexcept
     {
-        const int y = kRulerH + laneIdx * kLaneH + kBtnTopPad;
+        const int y = laneClipTopY (laneIdx) + kBtnTopPad;
         return Rectangle<int> (laneButtonX(), y, kBtnW, kBtnH);
     }
 
     Rectangle<int> muteToggleRect (int laneIdx) const noexcept
     {
-        const int y = kRulerH + laneIdx * kLaneH + kBtnTopPad
+        const int y = laneClipTopY (laneIdx) + kBtnTopPad
                     + (kBtnH + kBtnGap);
         return Rectangle<int> (laneButtonX(), y, kBtnW, kBtnH);
     }
 
     Rectangle<int> soloToggleRect (int laneIdx) const noexcept
     {
-        const int y = kRulerH + laneIdx * kLaneH + kBtnTopPad
+        const int y = laneClipTopY (laneIdx) + kBtnTopPad
                     + (kBtnH + kBtnGap) * 2;
         return Rectangle<int> (laneButtonX(), y, kBtnW, kBtnH);
     }
@@ -4302,8 +4383,8 @@ private:
     {
         const auto& lane    = owner.lanes_.getReference (laneIdx);
         const auto& runtime = owner.laneRuntime_.getReference (laneIdx);
-        const int y = kRulerH + laneIdx * kLaneH;
-        const Rectangle<int> bounds (0, y, getWidth(), kLaneH);
+        const int y = laneClipTopY (laneIdx);
+        const Rectangle<int> bounds (0, y, getWidth(), laneClipStripH());
 
         /* Bitwig-style vertical tint strip on the LEFT edge of the
          * label area, low-alpha wash for the rest, monospace font
@@ -4327,7 +4408,7 @@ private:
          * removed per visual-design call 2026-05-24: only the label
          * column carries the gutter / tint identity; the strip body
          * stays uniform background with regions floating on top. */
-        const Rectangle<int> labelArea (0, y, kLabelW, kLaneH);
+        const Rectangle<int> labelArea (0, y, kLabelW, laneClipStripH());
         g.setColour (kGutterColour);
         g.fillRect (labelArea);
 
@@ -4449,7 +4530,7 @@ private:
          * lines.  Bar lines slightly darker than the body bg, beat
          * lines (1/4-note in 4/4) one notch dimmer below that so the
          * timeline tempo reads as a glanceable grid behind regions. */
-        const Rectangle<int> stripArea (kLabelW, y, getWidth() - kLabelW, kLaneH);
+        const Rectangle<int> stripArea (kLabelW, y, getWidth() - kLabelW, laneClipStripH());
 
         const int gridBeatsPerBar = owner.monitor_ != nullptr
             ? juce::jmax (1, (int) owner.monitor_->beatsPerBar.get())
@@ -5011,7 +5092,7 @@ public:
         maxEnd = juce::jmax (maxEnd, liveRecordingEnd());
         const int needW = kLabelW + ((int) maxEnd + kFitPaddingBeats) * kPxPerBeat;
         const int needH = kRulerH
-                           + juce::jmax (kLaneH, owner.lanes_.size() * kLaneH)
+                           + juce::jmax (kLaneH, totalLanesHeight())
                            + kRulerH;
         return needW != getWidth() || needH != getHeight();
     }
@@ -7330,11 +7411,11 @@ void ArrangementView::publishMidiBindingsForLane (int laneIdx)
 int ArrangementView::laneIdxFromY (int yPx) const noexcept
 {
     /* Body coordinate; account for the top ruler row.  Negative or
-     * inside-ruler y returns -1 (no lane at that y).  Lane height
-     * is the Body's zoomable kLaneH. */
-    if (yPx < Body::kRulerH) return -1;
+     * inside-ruler y returns -1 (no lane at that y).  Delegates to
+     * Body::rowAtY so the cumulative variable-row geometry stays the
+     * single source of truth (handles expanded automation overlays). */
     if (body_ == nullptr) return -1;
-    const int idx = (yPx - Body::kRulerH) / body_->kLaneH;
+    const int idx = body_->rowAtY (yPx);
     if (idx < 0 || idx >= lanes_.size()) return -1;
     return idx;
 }
