@@ -574,6 +574,15 @@ public:
         auto& lane    = owner.lanes_.getReference (laneIdx);
         auto& runtime = owner.laneRuntime_.getReference (laneIdx);
 
+        /* Clicks below the clip strip land in this lane's automation
+         * overlay stack -- route there (remove [x] now; point gestures
+         * land in step 3) so the clip-strip region logic stays clip-only. */
+        if (e.y >= laneClipTopY (laneIdx) + laneClipStripH())
+        {
+            handleAutomationOverlayMouseDown (e, laneIdx);
+            return;
+        }
+
         /* Label area button hits (M/S/R) are tool-independent. */
         if (e.x < kLabelW)
         {
@@ -597,6 +606,27 @@ public:
                     default: break;
                 }
                 return;
+            }
+            /* Automation reveal toggle + add-param picker.  Hidden /
+             * inert on orphan lanes (no bindable target node). */
+            if (! runtime.isOrphan())
+            {
+                if (automationToggleRect (laneIdx).contains (e.x, e.y))
+                {
+                    if (owner.automationBindingCountForLane (lane.id) == 0)
+                        owner.showAddAutomationMenuForLane (
+                            laneIdx, localAreaToGlobal (automationAddRect (laneIdx)));
+                    else
+                        owner.setLaneAutomationCollapsed (
+                            lane.id, ! owner.isLaneAutomationCollapsed (lane.id));
+                    return;
+                }
+                if (automationAddRect (laneIdx).contains (e.x, e.y))
+                {
+                    owner.showAddAutomationMenuForLane (
+                        laneIdx, localAreaToGlobal (automationAddRect (laneIdx)));
+                    return;
+                }
             }
             if (muteToggleRect (laneIdx).contains (e.x, e.y))
             {
@@ -3721,10 +3751,35 @@ public:
      *  lane.  Constant (the zoomable kLaneH); overlays stack below it. */
     int laneClipStripH() const noexcept { return kLaneH; }
 
+    /* Automation overlay sub-row metrics.  An overlay row mirrors a lane
+     * row's left-column / strip split: a kLabelW-wide label band (colour
+     * swatch + param name + remove [x]) and a curve area to its right.
+     * kOverlayRowMinH floors a binding's persisted heightPx so a row is
+     * always tall enough to grab a breakpoint in. */
+    static constexpr int kOverlayRowMinH    = 30;
+    static constexpr int kOverlayCurvePadY  = 4;   // top/bottom inset of the curve area
+
+    /** Pixel height of one overlay binding row (clamped heightPx). */
+    int overlayRowHeight (const AutomationBinding& b) const noexcept
+    {
+        return juce::jmax (kOverlayRowMinH, b.heightPx);
+    }
+
     /** Summed pixel height of lane `i`'s EXPANDED automation overlay
-     *  sub-rows.  Returns 0 until Layer 3 step 2 wires overlay rendering;
-     *  this is the single seam where variable-row height enters the model. */
-    int overlayStackHeight (int /*laneIdx*/) const noexcept { return 0; }
+     *  sub-rows -- the single seam where variable-row height enters the
+     *  layout model.  Zero when the lane has no overlays OR its stack is
+     *  collapsed, so laneFullHeight collapses back to kLaneH. */
+    int overlayStackHeight (int laneIdx) const noexcept
+    {
+        if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return 0;
+        const auto laneId = owner.lanes_.getReference (laneIdx).id;
+        if (owner.collapsedAutomationLanes_.count (laneId) > 0) return 0;
+        int h = 0;
+        for (const auto& b : owner.automationBindings_)
+            if (b.ownerLaneId == laneId)
+                h += overlayRowHeight (b);
+        return h;
+    }
 
     /** Total vertical extent of lane `i` = clip strip + expanded overlays. */
     int laneFullHeight (int laneIdx) const noexcept
@@ -4067,6 +4122,85 @@ private:
         const int y = laneClipTopY (laneIdx) + kBtnTopPad
                     + (kBtnH + kBtnGap) * 2;
         return Rectangle<int> (laneButtonX(), y, kBtnW, kBtnH);
+    }
+
+    //==========================================================================
+    //  Automation overlay chrome (Layer 3 step 2)
+    //==========================================================================
+
+    /* Left inset of the lane label column's text/controls -- matches the
+     * `labelInset = kTintStripW + 4` paintLane uses (kTintStripW = 6). */
+    static constexpr int kLabelInsetX = 10;
+
+    /** "AUTO ▾/▸" reveal toggle, bottom-left of a lane's clip-strip label
+     *  column.  Bottom-anchored so it always sits inside the clip strip
+     *  regardless of vertical zoom. */
+    Rectangle<int> automationToggleRect (int laneIdx) const noexcept
+    {
+        const int h = 13;
+        const int y = laneClipTopY (laneIdx) + laneClipStripH() - h - 3;
+        return Rectangle<int> (kLabelInsetX, y, 50, h);
+    }
+
+    /** Compact "+" add-automation button, immediately right of the toggle. */
+    Rectangle<int> automationAddRect (int laneIdx) const noexcept
+    {
+        const auto t = automationToggleRect (laneIdx);
+        return Rectangle<int> (t.getRight() + 3, t.getY(), 15, t.getHeight());
+    }
+
+    /** Remove [x] hit box at the top-right of an overlay row's label band. */
+    Rectangle<int> overlayRemoveRect (int rowTopY) const noexcept
+    {
+        constexpr int sz = 12;
+        return Rectangle<int> (kLabelW - sz - 4, rowTopY + 3, sz, sz);
+    }
+
+    /** Curve drawing/edit area of an overlay row (right of the label band,
+     *  inset top + bottom so breakpoints at value 0/1 stay grabbable). */
+    Rectangle<int> overlayCurveArea (int rowTopY, int rowH) const noexcept
+    {
+        return Rectangle<int> (kLabelW, rowTopY + kOverlayCurvePadY,
+                               getWidth() - kLabelW,
+                               juce::jmax (1, rowH - kOverlayCurvePadY * 2));
+    }
+
+    /** Invoke fn(bindingArrayIndex, rowTopY, rowH) for each VISIBLE
+     *  automation overlay row of lane `laneIdx`, in stack order (top to
+     *  bottom, directly below the clip strip).  No-op when the lane's
+     *  stack is collapsed or it has no overlays.  The single shared
+     *  walker behind both paint + hit-test, so geometry can't drift. */
+    template <typename Fn>
+    void forEachOverlayRow (int laneIdx, Fn&& fn) const
+    {
+        if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
+        const auto laneId = owner.lanes_.getReference (laneIdx).id;
+        if (owner.collapsedAutomationLanes_.count (laneId) > 0) return;
+        int y = laneClipTopY (laneIdx) + laneClipStripH();
+        for (int i = 0; i < owner.automationBindings_.size(); ++i)
+        {
+            const auto& b = owner.automationBindings_.getReference (i);
+            if (b.ownerLaneId != laneId) continue;
+            const int h = overlayRowHeight (b);
+            fn (i, y, h);
+            y += h;
+        }
+    }
+
+    /** Dispatch a mouseDown that landed in lane `laneIdx`'s automation
+     *  overlay stack (below the clip strip).  Step 2 handles the remove
+     *  [x] only; point add/move/delete + curve-type land in step 3. */
+    void handleAutomationOverlayMouseDown (const MouseEvent& e, int laneIdx)
+    {
+        juce::Uuid removeId;
+        forEachOverlayRow (laneIdx, [&] (int bindingIdx, int rowTopY, int rowH)
+        {
+            if (e.y < rowTopY || e.y >= rowTopY + rowH) return;
+            if (overlayRemoveRect (rowTopY).contains (e.x, e.y))
+                removeId = owner.automationBindings_.getReference (bindingIdx).id;
+        });
+        if (! removeId.isNull())
+            owner.removeAutomationBinding (removeId);
     }
 
     /** Paint a volume envelope curve over the audio region body
@@ -4521,6 +4655,38 @@ private:
              * colour conveys state (dim/bright red when armed-but-
              * idle vs capturing) so the label can stay one word. */
             g.drawText ("REC", rect, juce::Justification::centred);
+        }
+
+        /* Automation reveal toggle + add button, bottom-left of the label
+         * column.  The toggle shows the overlay count + a ▾/▸ chevron; the
+         * "+" opens the param picker.  Hidden on orphan lanes (nothing to
+         * bind a target to).  Mirrors Bitwig's per-track automation button. */
+        if (! orphan)
+        {
+            const int autoCount = owner.automationBindingCountForLane (lane.id);
+            const bool collapsed = owner.isLaneAutomationCollapsed (lane.id);
+            const auto tRect = automationToggleRect (laneIdx);
+            const auto aRect = automationAddRect (laneIdx);
+
+            const juce::Colour autoTint = btnTint.withMultipliedBrightness (1.1f);
+            g.setColour (autoCount > 0 ? autoTint : btnTint.withAlpha (0.6f));
+            g.fillRect (tRect);
+            g.setColour (kRowDividerColour);
+            g.drawRect (tRect, 1);
+            g.setColour (juce::Colours::white.withAlpha (autoCount > 0 ? 0.85f : 0.5f));
+            g.setFont (monoFont (8.5f, juce::Font::bold));
+            const juce::String chevron = (autoCount > 0 && ! collapsed) ? "v" : ">";
+            g.drawText ("A" + (autoCount > 0 ? juce::String (autoCount) : juce::String())
+                            + " " + chevron,
+                        tRect.reduced (3, 0), juce::Justification::centredLeft);
+
+            g.setColour (btnTint);
+            g.fillRect (aRect);
+            g.setColour (kRowDividerColour);
+            g.drawRect (aRect, 1);
+            g.setColour (juce::Colours::white.withAlpha (0.75f));
+            g.setFont (monoFont (10.0f, juce::Font::bold));
+            g.drawText ("+", aRect, juce::Justification::centred);
         }
 
         /* Strip area beat grid only -- no per-lane background fill or
@@ -5068,6 +5234,163 @@ private:
             g.drawVerticalLine (phx,
                                 (float) stripArea.getY(),
                                 (float) stripArea.getBottom());
+        }
+
+        /* Automation overlay sub-rows nest directly below the clip strip
+         * within this lane's full extent (laneFullHeight). */
+        paintLaneAutomationOverlays (g, laneIdx);
+    }
+
+    /** Paint the expanded automation overlay rows for one lane: a label
+     *  band (colour swatch + param name + remove [x]) on the left, the
+     *  curve over a grid on the right.  Read-only here -- point gestures
+     *  land in step 3.  No-op when the lane's stack is collapsed/empty
+     *  (forEachOverlayRow handles that). */
+    void paintLaneAutomationOverlays (Graphics& g, int laneIdx)
+    {
+        const juce::Colour kRowBg      { 0xff'10'10'12 };
+        const juce::Colour kRowLabelBg { 0xff'17'17'1b };
+        const juce::Colour kDivider    { 0xff'2a'2a'2e };
+
+        const auto clip = g.getClipBounds();
+
+        forEachOverlayRow (laneIdx, [&] (int bindingIdx, int rowTopY, int rowH)
+        {
+            const Rectangle<int> rowRect (0, rowTopY, getWidth(), rowH);
+            if (! clip.intersects (rowRect))
+                return;
+
+            const auto& b = owner.automationBindings_.getReference (bindingIdx);
+
+            /* Curve-area background + centre (0.5) reference line. */
+            const auto curveArea = overlayCurveArea (rowTopY, rowH);
+            g.setColour (kRowBg);
+            g.fillRect (Rectangle<int> (kLabelW, rowTopY, getWidth() - kLabelW, rowH));
+            g.setColour (juce::Colours::white.withAlpha (0.05f));
+            g.drawHorizontalLine (curveArea.getCentreY(),
+                                  (float) curveArea.getX(),
+                                  (float) curveArea.getRight());
+
+            /* Curve itself, read from the song-owned engine track. */
+            paintAutomationCurve (g, b, curveArea);
+
+            /* Label band: dark fill, colour swatch on the far left, param
+             * name, remove [x] top-right. */
+            const Rectangle<int> labelBand (0, rowTopY, kLabelW, rowH);
+            g.setColour (kRowLabelBg);
+            g.fillRect (labelBand);
+            g.setColour (b.colour);
+            g.fillRect (labelBand.getX(), labelBand.getY(), 4, rowH - 1);
+
+            g.setColour (juce::Colours::white.withAlpha (0.85f));
+            g.setFont (monoFont (10.0f, juce::Font::plain));
+            const auto removeR = overlayRemoveRect (rowTopY);
+            g.drawText (b.name.isNotEmpty() ? b.name : juce::String ("Param"),
+                        Rectangle<int> (kLabelInsetX, rowTopY,
+                                        removeR.getX() - kLabelInsetX - 4, rowH),
+                        juce::Justification::centredLeft, true);
+
+            /* Remove [x]. */
+            g.setColour (juce::Colours::white.withAlpha (0.12f));
+            g.fillRect (removeR);
+            g.setColour (juce::Colours::white.withAlpha (0.7f));
+            g.setFont (monoFont (10.0f, juce::Font::bold));
+            g.drawText ("x", removeR, juce::Justification::centred);
+
+            /* Bottom divider so stacked overlays read as discrete rows. */
+            g.setColour (kDivider);
+            g.drawHorizontalLine (rowTopY + rowH - 1, 0.0f, (float) getWidth());
+        });
+    }
+
+    /** Stroke a binding's automation curve inside `curveArea`, plus a
+     *  small square handle at each breakpoint.  Reads the live engine
+     *  track snapshot (message-thread read of the wait-free PointList);
+     *  mirrors AutomationRegion::sampleAtBeats so the painted curve
+     *  matches what the audio thread plays.  Value 1 maps to the top of
+     *  the area, 0 to the bottom; beats map through kLabelW + beat*kPx. */
+    void paintAutomationCurve (Graphics& g, const AutomationBinding& b,
+                               const Rectangle<int>& curveArea)
+    {
+        auto* engine = owner.activeAutomationEngine();
+        if (engine == nullptr) return;
+        auto* track = engine->findTrackById (b.trackId);
+        if (track == nullptr) return;
+
+        const auto* regions = track->loadRegionSnapshot();
+        if (regions == nullptr) return;
+
+        const int padTop = curveArea.getY();
+        const int padBot = curveArea.getBottom();
+        auto valueToY = [padTop, padBot] (double v) noexcept
+        {
+            const double cl = juce::jlimit (0.0, 1.0, v);
+            return (float) (padBot - cl * (double) (padBot - padTop));
+        };
+        auto beatToX = [this] (double beat) noexcept
+        {
+            return (float) (kLabelW + (int) (beat * kPxPerBeat));
+        };
+
+        g.setColour (b.colour.withMultipliedBrightness (1.2f));
+
+        for (auto* region : *regions)
+        {
+            if (region == nullptr) continue;
+            const auto* pts = region->loadSnapshot();
+            if (pts == nullptr || pts->empty()) continue;
+
+            const double rPos = region->positionBeats;
+
+            /* Single point => flat line across the region's span. */
+            if (pts->size() == 1)
+            {
+                const float yv = valueToY ((*pts)[0].valueNormalized);
+                g.drawLine (beatToX (rPos), yv,
+                            beatToX (rPos + region->lengthBeats), yv, 1.4f);
+            }
+            else
+            {
+                /* Build a polyline that follows each segment's curve shape,
+                 * mirroring sampleAtBeats's evaluate() interpretation. */
+                juce::Path path;
+                bool started = false;
+                for (size_t i = 0; i + 1 < pts->size(); ++i)
+                {
+                    const auto& from = (*pts)[i];
+                    const auto& to   = (*pts)[i + 1];
+                    const bool startHigher = from.valueNormalized > to.valueNormalized;
+                    const float x0 = beatToX (rPos + from.tBeats);
+                    const float x1 = beatToX (rPos + to.tBeats);
+                    const int   steps = juce::jlimit (1, 96,
+                                                      (int) std::abs (x1 - x0) / 3);
+                    for (int s = 0; s <= steps; ++s)
+                    {
+                        const double f  = (double) s / (double) steps;
+                        const double yn = dsp::automation::evaluate (
+                                              f, from.curve, startHigher);
+                        const double v  = from.valueNormalized
+                                        + yn * (to.valueNormalized - from.valueNormalized);
+                        const float px = (float) (x0 + f * (x1 - x0));
+                        const float py = valueToY (v);
+                        if (! started) { path.startNewSubPath (px, py); started = true; }
+                        else            path.lineTo (px, py);
+                    }
+                }
+                if (started)
+                    g.strokePath (path, juce::PathStrokeType (1.4f));
+            }
+
+            /* Breakpoint handles -- small filled squares, brighter than
+             * the segment so they read as grab targets (step 3). */
+            g.setColour (b.colour.brighter (0.5f));
+            for (const auto& p : *pts)
+            {
+                const float hx = beatToX (rPos + p.tBeats);
+                const float hy = valueToY (p.valueNormalized);
+                g.fillRect (Rectangle<float> (hx - 2.5f, hy - 2.5f, 5.0f, 5.0f));
+            }
+            g.setColour (b.colour.withMultipliedBrightness (1.2f));
         }
     }
 
@@ -6668,7 +6991,153 @@ juce::Uuid ArrangementView::addAutomationLane (const dsp::automation::Automation
     writeLanesToSession();
     automation::saveAutomationToSession (*engine, sess->data());
 
+    /* A freshly-added overlay reveals expanded (the owner lane is not in
+     * the collapsed set by default), so resize + repaint so the new
+     * sub-row appears immediately. */
+    if (! ownerLaneId.isNull())
+        collapsedAutomationLanes_.erase (ownerLaneId);
+    if (body_ != nullptr)
+    {
+        body_->resizeForLanes();
+        body_->repaint();
+    }
+
     return b.id;
+}
+
+void ArrangementView::removeAutomationBinding (juce::Uuid bindingId)
+{
+    int idx = -1;
+    for (int i = 0; i < automationBindings_.size(); ++i)
+        if (automationBindings_.getReference (i).id == bindingId)
+        {
+            idx = i;
+            break;
+        }
+    if (idx < 0) return;
+
+    const auto trackId = automationBindings_.getReference (idx).trackId;
+    automationBindings_.remove (idx);
+
+    /* Drop the backing engine track (epoch-gated trash reclaim inside)
+     * then re-persist both presentation + engine state. */
+    auto* engine = activeAutomationEngine();
+    if (engine != nullptr && ! trackId.isNull())
+        engine->removeTrack (trackId);
+
+    writeLanesToSession();
+    if (engine != nullptr && services_ != nullptr)
+        if (auto sess = services_->context().session())
+            automation::saveAutomationToSession (*engine, sess->data());
+
+    if (body_ != nullptr)
+    {
+        body_->resizeForLanes();
+        body_->repaint();
+    }
+}
+
+int ArrangementView::automationBindingCountForLane (juce::Uuid laneId) const noexcept
+{
+    int n = 0;
+    for (const auto& b : automationBindings_)
+        if (b.ownerLaneId == laneId)
+            ++n;
+    return n;
+}
+
+bool ArrangementView::isLaneAutomationCollapsed (juce::Uuid laneId) const noexcept
+{
+    return collapsedAutomationLanes_.count (laneId) > 0;
+}
+
+void ArrangementView::setLaneAutomationCollapsed (juce::Uuid laneId, bool collapsed)
+{
+    if (collapsed)
+        collapsedAutomationLanes_.insert (laneId);
+    else
+        collapsedAutomationLanes_.erase (laneId);
+
+    if (body_ != nullptr)
+    {
+        body_->resizeForLanes();
+        body_->repaint();
+    }
+}
+
+void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
+                                                    juce::Rectangle<int> screenAnchor)
+{
+    if (laneIdx < 0 || laneIdx >= lanes_.size()) return;
+    if (services_ == nullptr) return;
+    auto sess = services_->context().session();
+    if (sess == nullptr) return;
+
+    const auto& lane = lanes_.getReference (laneIdx);
+
+    /* Resolve the lane's target node, then enumerate its automatable
+     * INPUT params via the shared resolver helper.  Orphan lanes (no
+     * resolvable node) have nothing to bind. */
+    const Node node = findNodeByUuid (sess->getActiveGraph(), lane.targetNodeUuid);
+    if (! node.isValid())
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "No automatable target on this lane", false, false);
+        m.showAt (screenAnchor);
+        return;
+    }
+
+    auto* proc = node.getObject();
+    if (proc == nullptr) return;
+
+    const auto params = automation::enumerateAutomatableParams (proc->getParameters (true));
+    if (params.empty())
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "No automatable parameters", false, false);
+        m.showAt (screenAnchor);
+        return;
+    }
+
+    /* Already-bound params show a tick so the user sees what's live and
+     * doesn't double-add the same target on this lane. */
+    juce::PopupMenu menu;
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        const auto& ap = params[i];
+        const auto key = automation::makeNodeParamKey (lane.targetNodeUuid, ap.index);
+
+        bool alreadyBound = false;
+        for (const auto& b : automationBindings_)
+            if (b.ownerLaneId == lane.id)
+                if (auto* engine = activeAutomationEngine())
+                    if (auto* trk = engine->findTrackById (b.trackId))
+                        if (trk->targetKey == key) { alreadyBound = true; break; }
+
+        juce::String label = ap.name;
+        if (ap.label.isNotEmpty())
+            label += " (" + ap.label + ")";
+        menu.addItem ((int) i + 1, label, true, alreadyBound);
+    }
+
+    const juce::Uuid laneId = lane.id;
+    menu.showMenuAsync (
+        juce::PopupMenu::Options().withTargetScreenArea (screenAnchor),
+        [this, params, laneId] (int result)
+        {
+            if (result <= 0 || result > (int) params.size()) return;
+            const auto& ap = params[(size_t) (result - 1)];
+            /* Re-resolve the lane by id -- lanes_ may have reordered
+             * while the async menu was open. */
+            for (const auto& l : lanes_)
+                if (l.id == laneId)
+                {
+                    addAutomationLane (
+                        automation::makeNodeParamKey (l.targetNodeUuid, ap.index),
+                        laneId);
+                    break;
+                }
+        });
 }
 
 void ArrangementView::writeMarkersToSessionTree (juce::ValueTree& arrTree)

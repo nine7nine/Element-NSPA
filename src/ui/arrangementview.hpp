@@ -23,6 +23,8 @@
 #include "services/timeline/lane.hpp"
 #include "services/timeline/marker_track.hpp"
 
+#include <set>
+
 #define EL_VIEW_ARRANGEMENT "ArrangementView"
 
 namespace element {
@@ -144,6 +146,27 @@ public:
      *  "add automation" affordance calls. */
     juce::Uuid addAutomationLane (const dsp::automation::AutomationTargetKey& key,
                                   juce::Uuid ownerLaneId = juce::Uuid::null());
+
+    /** Tear down the automation overlay identified by `bindingId`:
+     *  removes its presentation binding, drops the backing song-owned
+     *  AutomationEngine track (engine->removeTrack), and persists both.
+     *  No-op if the id isn't a known binding.  Wired to the overlay
+     *  header's remove [x]. */
+    void removeAutomationBinding (juce::Uuid bindingId);
+
+    /** Count / query / toggle the automation overlays attached to a
+     *  given owner lane.  Used by Body for the lane-header AUTO toggle
+     *  + overlay-stack layout.  The collapsed flag is runtime-only (see
+     *  collapsedAutomationLanes_). */
+    int  automationBindingCountForLane (juce::Uuid laneId) const noexcept;
+    bool isLaneAutomationCollapsed (juce::Uuid laneId) const noexcept;
+    void setLaneAutomationCollapsed (juce::Uuid laneId, bool collapsed);
+
+    /** Open the compact "add automation" picker for the lane at
+     *  `laneIdx`: enumerates the lane's target node's automatable
+     *  params and, on pick, calls addAutomationLane nested under the
+     *  lane.  Anchored at the given screen rectangle. */
+    void showAddAutomationMenuForLane (int laneIdx, juce::Rectangle<int> screenAnchor);
 
 private:
     void valueTreeChildAdded   (juce::ValueTree&, juce::ValueTree&) override;
@@ -456,6 +479,15 @@ private:
      *  trackId reference.  Sibling to <lanes> under tags::arrangement;
      *  loaded + written together. */
     juce::Array<AutomationBinding> automationBindings_;
+
+    /** Owner-lane ids whose automation-overlay stack is currently
+     *  collapsed (hidden).  Absence => expanded/shown, which is the
+     *  default once a lane gains its first overlay (Bitwig "reveal
+     *  automation" behaviour).  Runtime-only: survives view switches
+     *  (same view instance) but resets on session reload -- acceptable,
+     *  since the bindings + curves themselves persist; only the
+     *  show/hide chrome is ephemeral. */
+    std::set<juce::Uuid> collapsedAutomationLanes_;
 
     bool lanesLoadedFromSession_ = false;
 
