@@ -217,8 +217,12 @@ void CcLane::paint (juce::Graphics& g)
             {
                 const double f  = (double) s / (double) steps;
                 const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
-                const double v  = from.valueNormalized
-                                + yn * (to.valueNormalized - from.valueNormalized);
+                /* evaluate() is value-normalised (0=lower endpoint, 1=higher);
+                 * map onto [lo,hi] so descending segments slope DOWN instead
+                 * of reversing into a rising sawtooth. */
+                const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
+                const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
+                const double v  = lo + yn * (hi - lo);
                 const float px = x0 + (float) f * (x1 - x0);
                 const float py = yForValue (v);
                 if (! started) { path.startNewSubPath (px, py); started = true; }

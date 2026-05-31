@@ -75,6 +75,40 @@ BOOST_AUTO_TEST_CASE (linear_interpolation_and_clamp)
     BOOST_CHECK_EQUAL (lane.ccValueAtBeats (0.0), 0);
 }
 
+BOOST_AUTO_TEST_CASE (descending_segment_slopes_down)
+{
+    /* Regression: evaluate() is value-normalised, so a descending segment
+     * must slope DOWN, not reverse into a rising "sawtooth" (the bug the
+     * naive from + yn*(to-from) mapping produced). */
+    MidiCcLane lane;
+    lane.points = { pt (0.0, 1.0), pt (4.0, 0.0) };   // full decline
+
+    BOOST_CHECK (nearly (lane.valueAtBeats (0.0), 1.0));
+    BOOST_CHECK (nearly (lane.valueAtBeats (1.0), 0.75));
+    BOOST_CHECK (nearly (lane.valueAtBeats (2.0), 0.5));
+    BOOST_CHECK (nearly (lane.valueAtBeats (3.0), 0.25));
+    BOOST_CHECK (nearly (lane.valueAtBeats (4.0), 0.0));
+    /* Monotonic non-increasing across the whole segment. */
+    double prev = 2.0;
+    for (double b = 0.0; b <= 4.0; b += 0.5)
+    {
+        const double v = lane.valueAtBeats (b);
+        BOOST_CHECK (v <= prev + 1e-9);
+        prev = v;
+    }
+}
+
+BOOST_AUTO_TEST_CASE (mixed_incline_then_decline)
+{
+    MidiCcLane lane;
+    lane.points = { pt (0.0, 0.2), pt (2.0, 0.8), pt (4.0, 0.4) };
+    BOOST_CHECK (nearly (lane.valueAtBeats (0.0), 0.2));
+    BOOST_CHECK (nearly (lane.valueAtBeats (1.0), 0.5));   // rising
+    BOOST_CHECK (nearly (lane.valueAtBeats (2.0), 0.8));   // peak (point)
+    BOOST_CHECK (nearly (lane.valueAtBeats (3.0), 0.6));   // falling
+    BOOST_CHECK (nearly (lane.valueAtBeats (4.0), 0.4));
+}
+
 BOOST_AUTO_TEST_CASE (value_tree_round_trip_preserves_points_and_curve)
 {
     MidiCcLane lane;

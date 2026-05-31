@@ -94,7 +94,15 @@ double AutomationRegion::sampleAtBeats (double localBeats) const noexcept
 
     const double xNorm = (localBeats - from.tBeats) / span;
     const double yNorm = evaluate (xNorm, from.curve, from.valueNormalized > to.valueNormalized);
-    return from.valueNormalized + yNorm * (to.valueNormalized - from.valueNormalized);
+    /* evaluate() returns a VALUE-NORMALISED position in [0,1] where 0 maps
+     * to the lower endpoint value and 1 to the higher (Linear returns 1-x
+     * when startHigher), so the segment must be mapped onto [lo, hi] --
+     * NOT from + yn*(to-from), which only happens to be correct for
+     * ascending segments and reverses descending ones into a rising
+     * "sawtooth". */
+    const double lo = std::min (from.valueNormalized, to.valueNormalized);
+    const double hi = std::max (from.valueNormalized, to.valueNormalized);
+    return lo + yNorm * (hi - lo);
 }
 
 //==============================================================================

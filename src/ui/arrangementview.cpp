@@ -5674,8 +5674,12 @@ private:
                         const double f  = (double) s / (double) steps;
                         const double yn = dsp::automation::evaluate (
                                               f, from.curve, startHigher);
-                        const double v  = from.valueNormalized
-                                        + yn * (to.valueNormalized - from.valueNormalized);
+                        /* evaluate() is value-normalised (0=lower endpoint,
+                         * 1=higher), so map onto [lo,hi] -- from+yn*(to-from)
+                         * reverses descending segments into a sawtooth. */
+                        const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
+                        const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
+                        const double v  = lo + yn * (hi - lo);
                         const float px = (float) (x0 + f * (x1 - x0));
                         const float py = valueToY (v);
                         if (! started) { path.startNewSubPath (px, py); started = true; }

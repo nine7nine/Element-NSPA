@@ -51,7 +51,12 @@ double MidiCcLane::valueAtBeats (double localBeats) const noexcept
     const double xNorm = (localBeats - from.tBeats) / span;
     const double yNorm = dsp::automation::evaluate (
         xNorm, from.curve, from.valueNormalized > to.valueNormalized);
-    return from.valueNormalized + yNorm * (to.valueNormalized - from.valueNormalized);
+    /* Map onto [lo, hi] -- evaluate() is value-normalised (0 = lower
+     * endpoint, 1 = higher), so the naive from + yn*(to-from) reverses
+     * descending segments.  Matches AutomationRegion::sampleAtBeats. */
+    const double lo = std::min (from.valueNormalized, to.valueNormalized);
+    const double hi = std::max (from.valueNormalized, to.valueNormalized);
+    return lo + yNorm * (hi - lo);
 }
 
 int MidiCcLane::ccValueAtBeats (double localBeats) const noexcept
