@@ -3813,16 +3813,17 @@ public:
      * label column and drag.  Global Ctrl/Cmd+wheel zoom still scales lanes
      * that follow it (heightPx == 0); a drag sets an explicit per-lane
      * override (Lane.heightPx). */
-    static constexpr int kLaneResizeGrabPx = 4;
+    static constexpr int kLaneResizeGrabPx = 5;
     struct LaneResize { bool active = false; int laneIdx = -1; int startY = 0; int startH = 0; };
     LaneResize laneResize_;
 
-    /** Lane whose clip-strip bottom edge is within grab range of body-coord
-     *  (x, y), or -1.  Label column only (x < kLabelW) so it never fights
-     *  region edits in the strip area. */
-    int laneResizeHandleAt (int x, int y) const noexcept
+    /** Lane whose clip-strip bottom border is within grab range of
+     *  body-coord (x, y), or -1.  Spans the FULL track width (header +
+     *  timeline) -- like any DAW, you grab the divider line between two
+     *  tracks anywhere along it.  The bottom border sits below the inset
+     *  region bodies, so this doesn't fight region edits. */
+    int laneResizeHandleAt (int /*x*/, int y) const noexcept
     {
-        if (x >= kLabelW) return -1;
         for (int i = 0; i < owner.lanes_.size(); ++i)
         {
             const int bottom = laneClipTopY (i) + laneClipStripH (i);
@@ -5612,6 +5613,17 @@ private:
             g.drawVerticalLine (phx,
                                 (float) stripArea.getY(),
                                 (float) stripArea.getBottom());
+        }
+
+        /* Track separator: a visible 1-px divider across the full width at
+         * the lane's bottom border, so track boundaries are obvious AND the
+         * resize handle (drag this line -> up/down cursor) is discoverable,
+         * exactly like every DAW's track list.  A brighter 1-px highlight
+         * sits just above it for a subtle bevel. */
+        {
+            const int sepY = y + laneClipStripH (laneIdx) - 1;
+            g.setColour (juce::Colour (0xff'40'40'40));
+            g.drawHorizontalLine (sepY, 0.0f, (float) getWidth());
         }
 
         /* Automation overlay sub-rows nest directly below the clip strip
