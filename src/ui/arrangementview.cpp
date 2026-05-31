@@ -620,26 +620,19 @@ public:
                 }
                 return;
             }
-            /* Automation reveal toggle + add-param picker.  Hidden /
-             * inert on orphan lanes (no bindable target node). */
-            if (! runtime.isOrphan())
+            /* Automation reveal toggle.  Empty lane -> open the picker to
+             * add the first param; otherwise show/hide the overlay area
+             * (adding more + per-param selection live in the chip rail).
+             * Inert on orphan lanes (no bindable target node). */
+            if (! runtime.isOrphan() && automationToggleRect (laneIdx).contains (e.x, e.y))
             {
-                if (automationToggleRect (laneIdx).contains (e.x, e.y))
-                {
-                    if (owner.automationBindingCountForLane (lane.id) == 0)
-                        owner.showAddAutomationMenuForLane (
-                            laneIdx, localAreaToGlobal (automationAddRect (laneIdx)));
-                    else
-                        owner.setLaneAutomationCollapsed (
-                            lane.id, ! owner.isLaneAutomationCollapsed (lane.id));
-                    return;
-                }
-                if (automationAddRect (laneIdx).contains (e.x, e.y))
-                {
+                if (owner.automationBindingCountForLane (lane.id) == 0)
                     owner.showAddAutomationMenuForLane (
-                        laneIdx, localAreaToGlobal (automationAddRect (laneIdx)));
-                    return;
-                }
+                        laneIdx, localAreaToGlobal (automationToggleRect (laneIdx)));
+                else
+                    owner.setLaneAutomationCollapsed (
+                        lane.id, ! owner.isLaneAutomationCollapsed (lane.id));
+                return;
             }
             if (muteToggleRect (laneIdx).contains (e.x, e.y))
             {
@@ -3832,34 +3825,105 @@ public:
         return -1;
     }
 
-    /* Automation overlay sub-row metrics.  An overlay row mirrors a lane
-     * row's left-column / strip split: a kLabelW-wide label band (colour
-     * swatch + param name + remove [x]) and a curve area to its right.
-     * kOverlayRowMinH floors a binding's persisted heightPx so a row is
-     * always tall enough to grab a breakpoint in. */
-    static constexpr int kOverlayRowMinH    = 30;
-    static constexpr int kOverlayCurvePadY  = 4;   // top/bottom inset of the curve area
+    /* Automation overlay metrics.  A lane gets ONE bounded overlay area
+     * (NOT a stacked row per parameter): a thin chip-rail header + a single
+     * curve area in which ALL the lane's automation curves render
+     * SUPERIMPOSED + colour-coded.  One binding is "active" (editable, full
+     * opacity, handles + draggable segment midpoints); the rest are dimmed
+     * ghosts.  The chip rail scales with param count, the lane height does
+     * not -- the "no 50 stacked lanes" model. */
+    static constexpr int kOverlayHeaderH   = 16;   // chip-rail strip
+    static constexpr int kOverlayCurveH    = 90;   // superimposed curve area
+    static constexpr int kOverlayCurvePadY = 5;    // inset within the curve area
 
-    /** Pixel height of one overlay binding row (clamped heightPx). */
-    int overlayRowHeight (const AutomationBinding& b) const noexcept
-    {
-        return juce::jmax (kOverlayRowMinH, b.heightPx);
-    }
-
-    /** Summed pixel height of lane `i`'s EXPANDED automation overlay
-     *  sub-rows -- the single seam where variable-row height enters the
-     *  layout model.  Zero when the lane has no overlays OR its stack is
-     *  collapsed, so laneFullHeight collapses back to kLaneH. */
+    /** Height of lane `i`'s overlay area: 0 when collapsed or no bindings,
+     *  else a FIXED header + curve height independent of binding count.
+     *  The single seam where variable-row height enters the layout model. */
     int overlayStackHeight (int laneIdx) const noexcept
     {
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return 0;
         const auto laneId = owner.lanes_.getReference (laneIdx).id;
         if (owner.collapsedAutomationLanes_.count (laneId) > 0) return 0;
-        int h = 0;
-        for (const auto& b : owner.automationBindings_)
-            if (b.ownerLaneId == laneId)
-                h += overlayRowHeight (b);
-        return h;
+        if (owner.automationBindingCountForLane (laneId) == 0) return 0;
+        return kOverlayHeaderH + kOverlayCurveH;
+    }
+
+    /** Body-coord Y of the top of lane `i`'s overlay area (just below the
+     *  clip strip). */
+    int overlayAreaTopY (int laneIdx) const noexcept
+    {
+        return laneClipTopY (laneIdx) + laneClipStripH (laneIdx);
+    }
+
+    /** The shared superimposed-curve edit area (below the chip-rail header),
+     *  spanning the timeline strip width. */
+    Rectangle<int> overlayCurveArea (int laneIdx) const noexcept
+    {
+        const int top = overlayAreaTopY (laneIdx) + kOverlayHeaderH + kOverlayCurvePadY;
+        return Rectangle<int> (kLabelW, top,
+                               juce::jmax (1, getWidth() - kLabelW),
+                               juce::jmax (1, kOverlayCurveH - kOverlayCurvePadY * 2));
+    }
+
+    /** Array indices of the bindings owned by lane `laneIdx`, in order. */
+    std::vector<int> bindingIndicesForLane (int laneIdx) const
+    {
+        std::vector<int> out;
+        if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return out;
+        const auto laneId = owner.lanes_.getReference (laneIdx).id;
+        for (int i = 0; i < owner.automationBindings_.size(); ++i)
+            if (owner.automationBindings_.getReference (i).ownerLaneId == laneId)
+                out.push_back (i);
+        return out;
+    }
+
+    /** Array index of the lane's ACTIVE (editable) binding, or -1 if none.
+     *  Falls back to the first binding when the stored active id is absent
+     *  or stale. */
+    int activeBindingIndexForLane (int laneIdx) const
+    {
+        const auto idxs = bindingIndicesForLane (laneIdx);
+        if (idxs.empty()) return -1;
+        const auto laneId = owner.lanes_.getReference (laneIdx).id;
+        auto it = owner.activeAutomationBinding_.find (laneId);
+        if (it != owner.activeAutomationBinding_.end())
+            for (int i : idxs)
+                if (owner.automationBindings_.getReference (i).id == it->second)
+                    return i;
+        return idxs.front();
+    }
+
+    /* Chip-rail layout: one colour-coded chip per binding + a trailing "+"
+     * add chip, laid out left-to-right in the overlay header strip. */
+    struct OverlayChip { int bindingIdx = -1; Rectangle<int> rect; };
+    struct OverlayChips { std::vector<OverlayChip> chips; Rectangle<int> addRect; };
+
+    static juce::String chipLabel (const juce::String& name)
+    {
+        /* Show the param part after "Node: " when present, else the name;
+         * truncate so chips stay compact. */
+        juce::String s = name.contains (": ") ? name.fromFirstOccurrenceOf (": ", false, false)
+                                              : name;
+        if (s.length() > 14) s = s.substring (0, 13) + juce::String::charToString ((juce_wchar) 0x2026);
+        return s.isNotEmpty() ? s : juce::String ("Param");
+    }
+
+    OverlayChips overlayChipLayout (int laneIdx) const
+    {
+        OverlayChips out;
+        const int y = overlayAreaTopY (laneIdx) + 2;
+        const int h = kOverlayHeaderH - 4;
+        int x = kLabelInsetX;
+        for (int bi : bindingIndicesForLane (laneIdx))
+        {
+            const auto& b = owner.automationBindings_.getReference (bi);
+            const int w = juce::jlimit (40, 150,
+                                        16 + (int) chipLabel (b.name).length() * 6);
+            out.chips.push_back ({ bi, Rectangle<int> (x, y, w, h) });
+            x += w + 4;
+        }
+        out.addRect = Rectangle<int> (x, y, 16, h);
+        return out;
     }
 
     /** Total vertical extent of lane `i` = clip strip + expanded overlays. */
@@ -4215,57 +4279,14 @@ private:
 
     /** "AUTO ▾/▸" reveal toggle, bottom-left of a lane's clip-strip label
      *  column.  Bottom-anchored so it always sits inside the clip strip
-     *  regardless of vertical zoom. */
+     *  regardless of vertical zoom.  Click: opens the picker when the lane
+     *  has no automation yet, else shows/hides the overlay area.  Adding
+     *  more params + per-param selection happen in the overlay's chip rail. */
     Rectangle<int> automationToggleRect (int laneIdx) const noexcept
     {
         const int h = 13;
         const int y = laneClipTopY (laneIdx) + laneClipStripH (laneIdx) - h - 3;
-        return Rectangle<int> (kLabelInsetX, y, 50, h);
-    }
-
-    /** Compact "+" add-automation button, immediately right of the toggle. */
-    Rectangle<int> automationAddRect (int laneIdx) const noexcept
-    {
-        const auto t = automationToggleRect (laneIdx);
-        return Rectangle<int> (t.getRight() + 3, t.getY(), 15, t.getHeight());
-    }
-
-    /** Remove [x] hit box at the top-right of an overlay row's label band. */
-    Rectangle<int> overlayRemoveRect (int rowTopY) const noexcept
-    {
-        constexpr int sz = 12;
-        return Rectangle<int> (kLabelW - sz - 4, rowTopY + 3, sz, sz);
-    }
-
-    /** Curve drawing/edit area of an overlay row (right of the label band,
-     *  inset top + bottom so breakpoints at value 0/1 stay grabbable). */
-    Rectangle<int> overlayCurveArea (int rowTopY, int rowH) const noexcept
-    {
-        return Rectangle<int> (kLabelW, rowTopY + kOverlayCurvePadY,
-                               getWidth() - kLabelW,
-                               juce::jmax (1, rowH - kOverlayCurvePadY * 2));
-    }
-
-    /** Invoke fn(bindingArrayIndex, rowTopY, rowH) for each VISIBLE
-     *  automation overlay row of lane `laneIdx`, in stack order (top to
-     *  bottom, directly below the clip strip).  No-op when the lane's
-     *  stack is collapsed or it has no overlays.  The single shared
-     *  walker behind both paint + hit-test, so geometry can't drift. */
-    template <typename Fn>
-    void forEachOverlayRow (int laneIdx, Fn&& fn) const
-    {
-        if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
-        const auto laneId = owner.lanes_.getReference (laneIdx).id;
-        if (owner.collapsedAutomationLanes_.count (laneId) > 0) return;
-        int y = laneClipTopY (laneIdx) + laneClipStripH (laneIdx);
-        for (int i = 0; i < owner.automationBindings_.size(); ++i)
-        {
-            const auto& b = owner.automationBindings_.getReference (i);
-            if (b.ownerLaneId != laneId) continue;
-            const int h = overlayRowHeight (b);
-            fn (i, y, h);
-            y += h;
-        }
+        return Rectangle<int> (kLabelInsetX, y, 56, h);
     }
 
     //==========================================================================
@@ -4287,15 +4308,18 @@ private:
     /* In-flight automation point drag.  The point is identified by region
      * id + index; x-moves clamp between neighbours so the index stays valid
      * across the COW re-publish for the whole drag. */
+    enum class AutoEditMode { MovePoint, ShapeCurve };
     struct AutoPointEdit
     {
-        bool       active     = false;
-        int        laneIdx    = -1;
-        int        bindingIdx = -1;
-        juce::Uuid trackId;
-        juce::Uuid regionId;
-        int        pointIndex = -1;
-        bool       moved      = false;
+        bool         active       = false;
+        AutoEditMode mode         = AutoEditMode::MovePoint;
+        int          laneIdx      = -1;
+        int          bindingIdx   = -1;
+        juce::Uuid   trackId;
+        juce::Uuid   regionId;
+        int          pointIndex   = -1;   // MovePoint
+        int          segmentIndex = -1;   // ShapeCurve (from-point index)
+        bool         moved        = false;
     };
     AutoPointEdit autoEdit_;
 
@@ -4313,18 +4337,6 @@ private:
         const double b = (double) curveArea.getBottom();
         if (b <= t) return 0.5;
         return juce::jlimit (0.0, 1.0, (b - (double) y) / (b - t));
-    }
-
-    /** Recompute an overlay row's curve area from its binding index (used
-     *  mid-drag, when only bindingIdx/laneIdx are retained). */
-    Rectangle<int> curveAreaForBinding (int laneIdx, int bindingIdx) const
-    {
-        Rectangle<int> out;
-        forEachOverlayRow (laneIdx, [&] (int bi, int top, int h)
-        {
-            if (bi == bindingIdx) out = overlayCurveArea (top, h);
-        });
-        return out;
     }
 
     dsp::automation::AutomationRegion*
@@ -4377,6 +4389,45 @@ private:
         return (best >= 0 && bestD <= kAutoHandleGrabPx) ? best : -1;
     }
 
+    /** Value-normalised position of segment (from,to) at fraction f,
+     *  mirroring paintAutomationCurve + sampleAtBeats. */
+    static double autoSegValueAt (const dsp::automation::AutomationPoint& from,
+                                  const dsp::automation::AutomationPoint& to,
+                                  double f)
+    {
+        const bool startHigher = from.valueNormalized > to.valueNormalized;
+        const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
+        const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
+        const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
+        return lo + yn * (hi - lo);
+    }
+
+    /** Index of the SEGMENT (from-point index) whose midpoint handle is
+     *  within grab range of (x, y), or -1.  Flat segments report none. */
+    int findMidpointNear (dsp::automation::AutomationRegion* region,
+                          const Rectangle<int>& curveArea, int x, int y) const
+    {
+        const auto* pts = region->loadSnapshot();
+        if (pts == nullptr) return -1;
+        const double t = (double) curveArea.getY();
+        const double b = (double) curveArea.getBottom();
+        int    best  = -1;
+        double bestD = 1.0e9;
+        for (size_t i = 0; i + 1 < pts->size(); ++i)
+        {
+            if (std::abs ((*pts)[i].valueNormalized - (*pts)[i + 1].valueNormalized) < 1e-6)
+                continue;
+            const double midBeat = ((*pts)[i].tBeats + (*pts)[i + 1].tBeats) * 0.5;
+            const double px = (double) kLabelW
+                            + (region->positionBeats + midBeat) * (double) kPxPerBeat;
+            const double py = b - juce::jlimit (0.0, 1.0,
+                                  autoSegValueAt ((*pts)[i], (*pts)[i + 1], 0.5)) * (b - t);
+            const double d  = juce::jmax (std::abs (px - x), std::abs (py - y));
+            if (d < bestD) { bestD = d; best = (int) i; }
+        }
+        return (best >= 0 && bestD <= kAutoHandleGrabPx) ? best : -1;
+    }
+
     /** Persist the engine curve edit + bindings.  Called once per gesture
      *  (mouse-up / menu action), NOT per drag delta. */
     void persistAutomationEdit()
@@ -4389,40 +4440,58 @@ private:
     }
 
     /** Dispatch a mouseDown that landed in lane `laneIdx`'s automation
-     *  overlay stack (below the clip strip): remove [x], point grab/add,
-     *  or right-click point menu. */
+     *  overlay area: chip-rail (select active / add / remove) in the header
+     *  strip, or curve gestures (move point / shape segment / add point) on
+     *  the ACTIVE binding in the curve area. */
     void handleAutomationOverlayMouseDown (const MouseEvent& e, int laneIdx)
     {
         using namespace element::dsp::automation;
+        const auto laneId  = owner.lanes_.getReference (laneIdx).id;
+        const int  areaTop = overlayAreaTopY (laneIdx);
 
-        const auto hit = overlayRowAtY (laneIdx, e.y);
-        if (! hit.ok) return;
-        const auto& binding = owner.automationBindings_.getReference (hit.bindingIdx);
-
-        /* Remove [x] (label band). */
-        if (overlayRemoveRect (hit.rowTopY).contains (e.x, e.y))
+        /* --- Chip-rail header --- */
+        if (e.y < areaTop + kOverlayHeaderH)
         {
-            const auto id = binding.id;
-            owner.removeAutomationBinding (id);
+            const auto layout = overlayChipLayout (laneIdx);
+            if (layout.addRect.contains (e.x, e.y))
+            {
+                owner.showAddAutomationMenuForLane (laneIdx, localAreaToGlobal (layout.addRect));
+                return;
+            }
+            for (const auto& c : layout.chips)
+                if (c.rect.contains (e.x, e.y))
+                {
+                    const auto id = owner.automationBindings_.getReference (c.bindingIdx).id;
+                    if (e.mods.isPopupMenu())
+                        showOverlayChipMenu (id, e.getScreenPosition());
+                    else
+                    {
+                        owner.activeAutomationBinding_[laneId] = id;   // make active
+                        repaint();
+                    }
+                    return;
+                }
             return;
         }
 
-        /* Curve gestures only in the curve area (right of the label band). */
-        if (e.x < kLabelW) return;
+        /* --- Curve area: edit the ACTIVE binding --- */
+        const int activeIdx = activeBindingIndexForLane (laneIdx);
+        if (activeIdx < 0) return;
+        const auto& binding = owner.automationBindings_.getReference (activeIdx);
 
         auto* engine = owner.activeAutomationEngine();
         if (engine == nullptr) return;
         auto* track = engine->findTrackById (binding.trackId);
         if (track == nullptr) return;
 
-        const auto curveArea = overlayCurveArea (hit.rowTopY, hit.rowH);
+        const auto curveArea = overlayCurveArea (laneIdx);
         const double timelineBeat = overlayXToBeat (e.x);
         auto* region = regionAtBeat (track, timelineBeat);
         if (region == nullptr) return;   // click outside any region span
 
         const int existing = findPointNear (region, curveArea, e.x, e.y);
 
-        /* Right-click on a breakpoint: delete / curve-type menu. */
+        /* Right-click a breakpoint: delete / curve-type menu. */
         if (e.mods.isPopupMenu())
         {
             if (existing >= 0)
@@ -4430,74 +4499,112 @@ private:
                                       localAreaToGlobal (Rectangle<int> (e.x, e.y, 1, 1)));
             return;
         }
-
         if (! e.mods.isLeftButtonDown()) return;
 
-        const double value  = overlayYToValue (e.y, curveArea);
-        const double rawBeat = snapBeat (timelineBeat);
-        const double local   = juce::jlimit (0.0, region->lengthBeats,
-                                             rawBeat - region->positionBeats);
-
-        int pointIndex = existing;
-        if (existing < 0)
+        auto beginEdit = [&] (AutoEditMode mode, int pointIdx, int segIdx)
         {
-            /* Add a breakpoint (default Linear segment) at the sorted
-             * position, then drag it. */
-            auto pts = region->loadSnapshot() ? *region->loadSnapshot()
-                                              : AutomationRegion::PointList {};
-            AutomationPoint np;
-            np.tBeats          = local;
-            np.valueNormalized = value;
-            size_t insertIdx = 0;
-            while (insertIdx < pts.size() && pts[insertIdx].tBeats < local)
-                ++insertIdx;
-            pts.insert (pts.begin() + (long) insertIdx, np);
-            region->setPoints (pts);
-            pointIndex = (int) insertIdx;
+            autoEdit_              = AutoPointEdit {};
+            autoEdit_.active       = true;
+            autoEdit_.mode         = mode;
+            autoEdit_.laneIdx      = laneIdx;
+            autoEdit_.bindingIdx   = activeIdx;
+            autoEdit_.trackId      = binding.trackId;
+            autoEdit_.regionId     = region->id;
+            autoEdit_.pointIndex   = pointIdx;
+            autoEdit_.segmentIndex = segIdx;
+        };
+
+        /* Priority: breakpoint (move) > segment midpoint (shape) > empty (add). */
+        if (existing >= 0)
+        {
+            beginEdit (AutoEditMode::MovePoint, existing, -1);
+            repaint();
+            return;
+        }
+        const int seg = findMidpointNear (region, curveArea, e.x, e.y);
+        if (seg >= 0)
+        {
+            beginEdit (AutoEditMode::ShapeCurve, -1, seg);
+            repaint();
+            return;
         }
 
-        autoEdit_            = AutoPointEdit {};
-        autoEdit_.active     = true;
-        autoEdit_.laneIdx    = laneIdx;
-        autoEdit_.bindingIdx = hit.bindingIdx;
-        autoEdit_.trackId    = binding.trackId;
-        autoEdit_.regionId   = region->id;
-        autoEdit_.pointIndex = pointIndex;
-        autoEdit_.moved      = (existing < 0);   // an add always persists on up
+        /* Empty curve -> add a breakpoint + drag it. */
+        const double value   = overlayYToValue (e.y, curveArea);
+        const double rawBeat  = snapBeat (timelineBeat);
+        const double local    = juce::jlimit (0.0, region->lengthBeats,
+                                              rawBeat - region->positionBeats);
+        auto pts = region->loadSnapshot() ? *region->loadSnapshot()
+                                          : AutomationRegion::PointList {};
+        AutomationPoint np;
+        np.tBeats          = local;
+        np.valueNormalized = value;
+        size_t insertIdx = 0;
+        while (insertIdx < pts.size() && pts[insertIdx].tBeats < local)
+            ++insertIdx;
+        pts.insert (pts.begin() + (long) insertIdx, np);
+        region->setPoints (pts);
+        beginEdit (AutoEditMode::MovePoint, (int) insertIdx, -1);
+        autoEdit_.moved = true;   // an add always persists on up
         repaint();
     }
 
     void handleAutomationOverlayDrag (const MouseEvent& e)
     {
         using namespace element::dsp::automation;
-        if (autoEdit_.pointIndex < 0) return;
-
         auto* engine = owner.activeAutomationEngine();
         if (engine == nullptr) return;
         auto* track = engine->findTrackById (autoEdit_.trackId);
         auto* region = regionById (track, autoEdit_.regionId);
         if (region == nullptr) return;
 
-        const auto curveArea = curveAreaForBinding (autoEdit_.laneIdx, autoEdit_.bindingIdx);
+        const auto curveArea = overlayCurveArea (autoEdit_.laneIdx);
         if (curveArea.isEmpty()) return;
 
         auto pts = region->loadSnapshot() ? *region->loadSnapshot()
                                           : AutomationRegion::PointList {};
-        const int i = autoEdit_.pointIndex;
-        if (i < 0 || i >= (int) pts.size()) return;
 
-        const double rawBeat = snapBeat (overlayXToBeat (e.x));
-        double local = juce::jlimit (0.0, region->lengthBeats,
-                                     rawBeat - region->positionBeats);
+        if (autoEdit_.mode == AutoEditMode::MovePoint)
+        {
+            const int i = autoEdit_.pointIndex;
+            if (i < 0 || i >= (int) pts.size()) return;
 
-        /* Clamp between neighbours so the point can't reorder mid-drag
-         * (keeps pointIndex stable). */
-        constexpr double eps = 1.0e-4;
-        if (i > 0)                       local = juce::jmax (local, pts[(size_t) i - 1].tBeats + eps);
-        if (i < (int) pts.size() - 1)    local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
+            const double rawBeat = snapBeat (overlayXToBeat (e.x));
+            double local = juce::jlimit (0.0, region->lengthBeats,
+                                         rawBeat - region->positionBeats);
+            constexpr double eps = 1.0e-4;
+            if (i > 0)                    local = juce::jmax (local, pts[(size_t) i - 1].tBeats + eps);
+            if (i < (int) pts.size() - 1) local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
 
-        pts[(size_t) i].tBeats          = local;
-        pts[(size_t) i].valueNormalized = overlayYToValue (e.y, curveArea);
+            pts[(size_t) i].tBeats          = local;
+            pts[(size_t) i].valueNormalized = overlayYToValue (e.y, curveArea);
+        }
+        else // ShapeCurve
+        {
+            const int i = autoEdit_.segmentIndex;
+            if (i < 0 || i + 1 >= (int) pts.size()) return;
+            const double v0 = pts[(size_t) i].valueNormalized;
+            const double v1 = pts[(size_t) i + 1].valueNormalized;
+            const double lo = juce::jmin (v0, v1);
+            const double hi = juce::jmax (v0, v1);
+            if (hi - lo < 1e-6) return;
+
+            /* Drive curviness so the curve's midpoint passes through the
+             * cursor (analytic inverse of Exponent's midpoint), matching
+             * the smooth volume-envelope feel. */
+            const double M = juce::jlimit (0.02, 0.98,
+                                           (overlayYToValue (e.y, curveArea) - lo) / (hi - lo));
+            const double k = std::log (0.5);
+            double c;
+            if (M >= 0.5) c =  (1.0 - std::log (M)       / k) / 0.95;
+            else          c = -(1.0 - std::log (1.0 - M) / k) / 0.95;
+            c = juce::jlimit (-1.0, 1.0, c);
+            pts[(size_t) i].curve.algorithm = (std::abs (c) < 1e-3)
+                                                  ? CurveAlgorithm::Linear
+                                                  : CurveAlgorithm::Exponent;
+            pts[(size_t) i].curve.curviness = c;
+        }
+
         region->setPoints (pts);
         autoEdit_.moved = true;
         repaint();
@@ -4570,16 +4677,14 @@ private:
         repaint();
     }
 
-    /** Locate the overlay row at body-coord y for lane `laneIdx`. */
-    struct OverlayRowHit { bool ok = false; int bindingIdx = -1; int rowTopY = 0; int rowH = 0; };
-    OverlayRowHit overlayRowAtY (int laneIdx, int y) const
+    /** Right-click menu for a chip: remove that automation overlay. */
+    void showOverlayChipMenu (juce::Uuid bindingId, juce::Point<int> screenPos)
     {
-        OverlayRowHit hit;
-        forEachOverlayRow (laneIdx, [&] (int bi, int top, int h)
-        {
-            if (y >= top && y < top + h) hit = OverlayRowHit { true, bi, top, h };
-        });
-        return hit;
+        juce::PopupMenu menu;
+        menu.addItem (1, "Remove automation");
+        const int r = menu.showAt (juce::Rectangle<int> (screenPos.x, screenPos.y, 1, 1));
+        if (r == 1)
+            owner.removeAutomationBinding (bindingId);
     }
 
     /** Paint a volume envelope curve over the audio region body
@@ -5036,16 +5141,16 @@ private:
             g.drawText ("REC", rect, juce::Justification::centred);
         }
 
-        /* Automation reveal toggle + add button, bottom-left of the label
-         * column.  The toggle shows the overlay count + a ▾/▸ chevron; the
-         * "+" opens the param picker.  Hidden on orphan lanes (nothing to
-         * bind a target to).  Mirrors Bitwig's per-track automation button. */
+        /* Automation reveal toggle, bottom-left of the label column.  Shows
+         * the param count + a ▾/▸ chevron; click adds the first param (empty)
+         * or shows/hides the overlay area.  Adding more + selecting the
+         * active param happen in the overlay's chip rail.  Hidden on orphan
+         * lanes (nothing to bind a target to). */
         if (! orphan)
         {
             const int autoCount = owner.automationBindingCountForLane (lane.id);
             const bool collapsed = owner.isLaneAutomationCollapsed (lane.id);
             const auto tRect = automationToggleRect (laneIdx);
-            const auto aRect = automationAddRect (laneIdx);
 
             const juce::Colour autoTint = btnTint.withMultipliedBrightness (1.1f);
             g.setColour (autoCount > 0 ? autoTint : btnTint.withAlpha (0.6f));
@@ -5055,17 +5160,9 @@ private:
             g.setColour (juce::Colours::white.withAlpha (autoCount > 0 ? 0.85f : 0.5f));
             g.setFont (monoFont (8.5f, juce::Font::bold));
             const juce::String chevron = (autoCount > 0 && ! collapsed) ? "v" : ">";
-            g.drawText ("A" + (autoCount > 0 ? juce::String (autoCount) : juce::String())
+            g.drawText ("AUTO" + (autoCount > 0 ? " " + juce::String (autoCount) : juce::String())
                             + " " + chevron,
                         tRect.reduced (3, 0), juce::Justification::centredLeft);
-
-            g.setColour (btnTint);
-            g.fillRect (aRect);
-            g.setColour (kRowDividerColour);
-            g.drawRect (aRect, 1);
-            g.setColour (juce::Colours::white.withAlpha (0.75f));
-            g.setFont (monoFont (10.0f, juce::Font::bold));
-            g.drawText ("+", aRect, juce::Justification::centred);
         }
 
         /* Strip area beat grid only -- no per-lane background fill or
@@ -5638,75 +5735,78 @@ private:
      *  (forEachOverlayRow handles that). */
     void paintLaneAutomationOverlays (Graphics& g, int laneIdx)
     {
-        const juce::Colour kRowBg      { 0xff'10'10'12 };
-        const juce::Colour kRowLabelBg { 0xff'17'17'1b };
-        const juce::Colour kDivider    { 0xff'2a'2a'2e };
+        const auto laneId = owner.lanes_.getReference (laneIdx).id;
+        if (owner.collapsedAutomationLanes_.count (laneId) > 0) return;
+        if (owner.automationBindingCountForLane (laneId) == 0) return;
 
-        const auto clip = g.getClipBounds();
+        const int areaTop = overlayAreaTopY (laneIdx);
+        const Rectangle<int> areaRect (0, areaTop, getWidth(),
+                                       kOverlayHeaderH + kOverlayCurveH);
+        if (! g.getClipBounds().intersects (areaRect)) return;
 
-        forEachOverlayRow (laneIdx, [&] (int bindingIdx, int rowTopY, int rowH)
+        const auto curveArea = overlayCurveArea (laneIdx);
+        const int  activeIdx = activeBindingIndexForLane (laneIdx);
+        const auto idxs      = bindingIndicesForLane (laneIdx);
+
+        /* Backdrop (curve area) + header strip + centre reference line. */
+        g.setColour (juce::Colour (0xff'10'10'12));
+        g.fillRect (Rectangle<int> (kLabelW, areaTop + kOverlayHeaderH,
+                                    getWidth() - kLabelW, kOverlayCurveH));
+        g.setColour (juce::Colour (0xff'17'17'1b));
+        g.fillRect (Rectangle<int> (0, areaTop, getWidth(), kOverlayHeaderH));
+        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        g.drawHorizontalLine (curveArea.getCentreY(),
+                              (float) curveArea.getX(), (float) curveArea.getRight());
+
+        /* Superimposed curves: ghosts first, the active one on top. */
+        for (int bi : idxs)
+            if (bi != activeIdx)
+                paintAutomationCurve (g, owner.automationBindings_.getReference (bi),
+                                      curveArea, false);
+        if (activeIdx >= 0)
+            paintAutomationCurve (g, owner.automationBindings_.getReference (activeIdx),
+                                  curveArea, true);
+
+        /* Chip rail: one colour chip per param (active outlined) + "+". */
+        const auto layout = overlayChipLayout (laneIdx);
+        g.setFont (monoFont (9.0f, juce::Font::bold));
+        for (const auto& c : layout.chips)
         {
-            const Rectangle<int> rowRect (0, rowTopY, getWidth(), rowH);
-            if (! clip.intersects (rowRect))
-                return;
-
-            const auto& b = owner.automationBindings_.getReference (bindingIdx);
-
-            /* Curve-area background + centre (0.5) reference line. */
-            const auto curveArea = overlayCurveArea (rowTopY, rowH);
-            g.setColour (kRowBg);
-            g.fillRect (Rectangle<int> (kLabelW, rowTopY, getWidth() - kLabelW, rowH));
-            g.setColour (juce::Colours::white.withAlpha (0.05f));
-            g.drawHorizontalLine (curveArea.getCentreY(),
-                                  (float) curveArea.getX(),
-                                  (float) curveArea.getRight());
-
-            /* Curve itself, read from the song-owned engine track. */
-            paintAutomationCurve (g, b, curveArea);
-
-            /* Label band: dark fill, colour swatch on the far left, param
-             * name, remove [x] top-right. */
-            const Rectangle<int> labelBand (0, rowTopY, kLabelW, rowH);
-            g.setColour (kRowLabelBg);
-            g.fillRect (labelBand);
-            g.setColour (b.colour);
-            g.fillRect (labelBand.getX(), labelBand.getY(), 4, rowH - 1);
-
-            g.setColour (juce::Colours::white.withAlpha (0.85f));
-            g.setFont (monoFont (10.0f, juce::Font::plain));
-            const auto removeR = overlayRemoveRect (rowTopY);
-            g.drawText (b.name.isNotEmpty() ? b.name : juce::String ("Param"),
-                        Rectangle<int> (kLabelInsetX, rowTopY,
-                                        removeR.getX() - kLabelInsetX - 4, rowH),
+            const auto& b = owner.automationBindings_.getReference (c.bindingIdx);
+            const bool active = (c.bindingIdx == activeIdx);
+            g.setColour (b.colour.withMultipliedBrightness (active ? 1.0f : 0.6f)
+                                 .withAlpha (active ? 0.95f : 0.5f));
+            g.fillRect (c.rect);
+            g.setColour (active ? juce::Colours::white : juce::Colours::black.withAlpha (0.5f));
+            g.drawRect (c.rect, active ? 2 : 1);
+            g.setColour (active ? juce::Colours::white : juce::Colours::white.withAlpha (0.8f));
+            g.drawText (chipLabel (b.name), c.rect.reduced (4, 0),
                         juce::Justification::centredLeft, true);
+        }
+        g.setColour (juce::Colour (0xff'2c'2c'32));
+        g.fillRect (layout.addRect);
+        g.setColour (juce::Colours::white.withAlpha (0.7f));
+        g.setFont (monoFont (11.0f, juce::Font::bold));
+        g.drawText ("+", layout.addRect, juce::Justification::centred);
 
-            /* Remove [x]. */
-            g.setColour (juce::Colours::white.withAlpha (0.12f));
-            g.fillRect (removeR);
-            g.setColour (juce::Colours::white.withAlpha (0.7f));
-            g.setFont (monoFont (10.0f, juce::Font::bold));
-            g.drawText ("x", removeR, juce::Justification::centred);
-
-            /* Bottom divider so stacked overlays read as discrete rows. */
-            g.setColour (kDivider);
-            g.drawHorizontalLine (rowTopY + rowH - 1, 0.0f, (float) getWidth());
-        });
+        /* Bottom divider for the overlay area. */
+        g.setColour (juce::Colour (0xff'2a'2a'2e));
+        g.drawHorizontalLine (areaTop + kOverlayHeaderH + kOverlayCurveH - 1,
+                              0.0f, (float) getWidth());
     }
 
-    /** Stroke a binding's automation curve inside `curveArea`, plus a
-     *  small square handle at each breakpoint.  Reads the live engine
-     *  track snapshot (message-thread read of the wait-free PointList);
-     *  mirrors AutomationRegion::sampleAtBeats so the painted curve
-     *  matches what the audio thread plays.  Value 1 maps to the top of
-     *  the area, 0 to the bottom; beats map through kLabelW + beat*kPx. */
+    /** Stroke ONE binding's automation curve inside `curveArea`, optionally
+     *  as the active (bright, with breakpoint + midpoint handles) or a
+     *  dimmed ghost.  Holds flat at the first/last point to the region
+     *  edges (lead-in/out).  Mirrors AutomationRegion::sampleAtBeats so the
+     *  drawn curve matches playback.  Value 1 = top, 0 = bottom. */
     void paintAutomationCurve (Graphics& g, const AutomationBinding& b,
-                               const Rectangle<int>& curveArea)
+                               const Rectangle<int>& curveArea, bool active)
     {
         auto* engine = owner.activeAutomationEngine();
         if (engine == nullptr) return;
         auto* track = engine->findTrackById (b.trackId);
         if (track == nullptr) return;
-
         const auto* regions = track->loadRegionSnapshot();
         if (regions == nullptr) return;
 
@@ -5722,7 +5822,9 @@ private:
             return (float) (kLabelW + (int) (beat * kPxPerBeat));
         };
 
-        g.setColour (b.colour.withMultipliedBrightness (1.2f));
+        const float strokeW = active ? 1.6f : 1.2f;
+        const juce::Colour curveCol = active ? b.colour.withMultipliedBrightness (1.25f)
+                                             : b.colour.withAlpha (0.35f);
 
         for (auto* region : *regions)
         {
@@ -5730,21 +5832,20 @@ private:
             const auto* pts = region->loadSnapshot();
             if (pts == nullptr || pts->empty()) continue;
 
-            const double rPos = region->positionBeats;
+            const double rPos    = region->positionBeats;
+            const float  leftX   = beatToX (rPos);
+            const float  rightX  = beatToX (rPos + region->lengthBeats);
 
-            /* Single point => flat line across the region's span. */
+            g.setColour (curveCol);
             if (pts->size() == 1)
             {
                 const float yv = valueToY ((*pts)[0].valueNormalized);
-                g.drawLine (beatToX (rPos), yv,
-                            beatToX (rPos + region->lengthBeats), yv, 1.4f);
+                g.drawLine (leftX, yv, rightX, yv, strokeW);
             }
             else
             {
-                /* Build a polyline that follows each segment's curve shape,
-                 * mirroring sampleAtBeats's evaluate() interpretation. */
                 juce::Path path;
-                bool started = false;
+                path.startNewSubPath (leftX, valueToY (pts->front().valueNormalized)); // lead-in
                 for (size_t i = 0; i + 1 < pts->size(); ++i)
                 {
                     const auto& from = (*pts)[i];
@@ -5752,39 +5853,39 @@ private:
                     const bool startHigher = from.valueNormalized > to.valueNormalized;
                     const float x0 = beatToX (rPos + from.tBeats);
                     const float x1 = beatToX (rPos + to.tBeats);
-                    const int   steps = juce::jlimit (1, 96,
-                                                      (int) std::abs (x1 - x0) / 3);
+                    const int   steps = juce::jlimit (1, 96, (int) std::abs (x1 - x0) / 3);
                     for (int s = 0; s <= steps; ++s)
                     {
                         const double f  = (double) s / (double) steps;
-                        const double yn = dsp::automation::evaluate (
-                                              f, from.curve, startHigher);
-                        /* evaluate() is value-normalised (0=lower endpoint,
-                         * 1=higher), so map onto [lo,hi] -- from+yn*(to-from)
-                         * reverses descending segments into a sawtooth. */
+                        const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
                         const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
                         const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
                         const double v  = lo + yn * (hi - lo);
-                        const float px = (float) (x0 + f * (x1 - x0));
-                        const float py = valueToY (v);
-                        if (! started) { path.startNewSubPath (px, py); started = true; }
-                        else            path.lineTo (px, py);
+                        path.lineTo ((float) (x0 + f * (x1 - x0)), valueToY (v));
                     }
                 }
-                if (started)
-                    g.strokePath (path, juce::PathStrokeType (1.4f));
+                path.lineTo (rightX, valueToY (pts->back().valueNormalized)); // lead-out
+                g.strokePath (path, juce::PathStrokeType (strokeW));
             }
 
-            /* Breakpoint handles -- small filled squares, brighter than
-             * the segment so they read as grab targets (step 3). */
+            if (! active) continue;   // ghosts: no handles
+
+            /* Segment midpoint handles (drag to bend) -- hollow rings. */
+            for (size_t i = 0; i + 1 < pts->size(); ++i)
+            {
+                if (std::abs ((*pts)[i].valueNormalized - (*pts)[i + 1].valueNormalized) < 1e-6)
+                    continue;
+                const double midBeat = ((*pts)[i].tBeats + (*pts)[i + 1].tBeats) * 0.5;
+                const float mx = beatToX (rPos + midBeat);
+                const float my = valueToY (autoSegValueAt ((*pts)[i], (*pts)[i + 1], 0.5));
+                g.setColour (curveCol.withAlpha (0.5f));
+                g.drawEllipse (mx - 3.0f, my - 3.0f, 6.0f, 6.0f, 1.2f);
+            }
+            /* Breakpoint handles -- filled squares on top. */
             g.setColour (b.colour.brighter (0.5f));
             for (const auto& p : *pts)
-            {
-                const float hx = beatToX (rPos + p.tBeats);
-                const float hy = valueToY (p.valueNormalized);
-                g.fillRect (Rectangle<float> (hx - 2.5f, hy - 2.5f, 5.0f, 5.0f));
-            }
-            g.setColour (b.colour.withMultipliedBrightness (1.2f));
+                g.fillRect (Rectangle<float> (beatToX (rPos + p.tBeats) - 2.5f,
+                                              valueToY (p.valueNormalized) - 2.5f, 5.0f, 5.0f));
         }
     }
 

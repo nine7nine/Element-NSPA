@@ -23,6 +23,7 @@
 #include "services/timeline/lane.hpp"
 #include "services/timeline/marker_track.hpp"
 
+#include <map>
 #include <set>
 
 #define EL_VIEW_ARRANGEMENT "ArrangementView"
@@ -488,6 +489,13 @@ private:
      *  since the bindings + curves themselves persist; only the
      *  show/hide chrome is ephemeral. */
     std::set<juce::Uuid> collapsedAutomationLanes_;
+
+    /** Per-lane ACTIVE automation binding (laneId -> bindingId).  All of a
+     *  lane's automation curves render superimposed + colour-coded in one
+     *  bounded overlay area; the active one is editable (full opacity +
+     *  handles), the rest are dimmed ghosts.  Absence / stale id => the
+     *  lane's first binding.  Runtime-only chrome, like the collapsed set. */
+    std::map<juce::Uuid, juce::Uuid> activeAutomationBinding_;
 
     bool lanesLoadedFromSession_ = false;
 
