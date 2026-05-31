@@ -402,14 +402,21 @@ void CcLane::mouseDrag (const juce::MouseEvent& e)
         const double hi = juce::jmax (v0, v1);
         if (hi - lo < 1e-6) return;   // flat: nothing to bend
 
-        /* Map the cursor's value onto the segment's [lo,hi] range, then to
-         * a curviness via the approximate inverse of evaluate()'s midpoint
-         * response (Exponent: midpoint value-norm spans ~[0.034,0.966] as
-         * curviness goes [-1,+1]; c>0 bulges the midpoint toward hi for
-         * BOTH ascending + descending segments).  Drag up -> bulge up. */
-        const double midNorm = juce::jlimit (0.0, 1.0,
-                                             (valueForY (e.y) - lo) / (hi - lo));
-        const double c = juce::jlimit (-1.0, 1.0, (midNorm - 0.5) / 0.466);
+        /* Direct manipulation: drive the segment's curviness so the curve's
+         * MIDPOINT passes through the cursor -- the smooth, controllable
+         * feel the volume envelopes have.  Exponent's midpoint as a function
+         * of curviness c is  M(c) = 0.5^(1-0.95c)        for c >= 0
+         *                    M(c) = 1 - 0.5^(1+0.95c)    for c <  0
+         * (value-normalised, independent of segment direction).  Invert it
+         * analytically so the handle tracks the cursor 1:1 instead of the
+         * old linear guess that felt dead then snapped to extremes. */
+        const double M = juce::jlimit (0.02, 0.98,
+                                       (valueForY (e.y) - lo) / (hi - lo));
+        const double k = std::log (0.5);
+        double c;
+        if (M >= 0.5) c =  (1.0 - std::log (M)       / k) / 0.95;
+        else          c = -(1.0 - std::log (1.0 - M) / k) / 0.95;
+        c = juce::jlimit (-1.0, 1.0, c);
         pts[(size_t) i].curve.algorithm = (std::abs (c) < 1e-3)
                                               ? CurveAlgorithm::Linear
                                               : CurveAlgorithm::Exponent;
