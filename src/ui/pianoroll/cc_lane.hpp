@@ -95,7 +95,7 @@ private:
     int findPointNear (const MidiNoteRegion& region, int x, int y,
                        int pxPerBeat) const noexcept;
 
-    void showSelectorMenu();
+    void showSelectorMenu (juce::Point<int> screenPos);
     void showPointMenu (int pointIndex, juce::Point<int> screenPos);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CcLane)

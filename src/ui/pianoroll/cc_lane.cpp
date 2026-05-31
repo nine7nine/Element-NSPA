@@ -193,18 +193,26 @@ void CcLane::paint (juce::Graphics& g)
 
     const juce::Colour curveCol { 0xff'd0'9a'48 };   // amber, distinct from velocity blue
 
-    /* Segments through the curve shape. */
+    /* Segments through the curve shape.  The curve is held flat at the
+     * first point's value from the region start, and at the last point's
+     * value to the region end (lead-in / lead-out), so it spans the whole
+     * region like a real automation lane rather than floating between the
+     * outermost points. */
     g.setColour (curveCol);
+    const float leftX  = (float) xForBeat (0.0, pxPerBeat);
+    const float rightX = (float) xForBeat (region->lengthBeats, pxPerBeat);
     if (pts.size() == 1)
     {
         const float y = yForValue (pts[0].valueNormalized);
-        g.drawLine ((float) xForBeat (pts[0].tBeats, pxPerBeat), y,
-                    (float) xForBeat (region->lengthBeats, pxPerBeat), y, 1.4f);
+        g.drawLine (leftX, y, rightX, y, 1.4f);
     }
     else
     {
         juce::Path path;
         bool started = false;
+        /* Lead-in: flat at the first point's value from the region start. */
+        path.startNewSubPath (leftX, yForValue (pts.front().valueNormalized));
+        started = true;
         for (size_t i = 0; i + 1 < pts.size(); ++i)
         {
             const auto& from = pts[i];
@@ -229,8 +237,9 @@ void CcLane::paint (juce::Graphics& g)
                 else            path.lineTo (px, py);
             }
         }
-        if (started)
-            g.strokePath (path, juce::PathStrokeType (1.4f));
+        /* Lead-out: flat at the last point's value to the region end. */
+        path.lineTo (rightX, yForValue (pts.back().valueNormalized));
+        g.strokePath (path, juce::PathStrokeType (1.4f));
     }
 
     /* Breakpoint handles. */
@@ -246,7 +255,7 @@ void CcLane::paint (juce::Graphics& g)
 void CcLane::mouseDown (const juce::MouseEvent& e)
 {
     /* Header selector chip. */
-    if (selectorRect().contains (e.x, e.y)) { showSelectorMenu(); return; }
+    if (selectorRect().contains (e.x, e.y)) { showSelectorMenu (e.getScreenPosition()); return; }
 
     auto* region = resolveBoundRegion();
     if (region == nullptr) return;
@@ -329,22 +338,19 @@ void CcLane::mouseUp (const juce::MouseEvent&)
     repaint();
 }
 
-void CcLane::showSelectorMenu()
+void CcLane::showSelectorMenu (juce::Point<int> screenPos)
 {
     juce::PopupMenu menu;
     for (const auto& c : kCommonCcs)
         menu.addItem (c.cc + 1, "CC " + juce::String (c.cc) + "  " + c.name,
                       true, c.cc == ccNumber_);
 
-    juce::Component::SafePointer<CcLane> safe (this);
-    menu.showMenuAsync (
-        juce::PopupMenu::Options().withTargetComponent (this),
-        [safe] (int result)
-        {
-            if (result <= 0) return;
-            if (auto* self = safe.getComponent())
-                self->setCcNumber (result - 1);
-        });
+    /* Synchronous showAt at the cursor -- the proven pattern in this build
+     * (SessionView's context menus).  showMenuAsync mis-rendered detached
+     * at the window bottom + keyboard-only under this windowing setup. */
+    const int result = menu.showAt (juce::Rectangle<int> (screenPos.x, screenPos.y, 1, 1));
+    if (result > 0)
+        setCcNumber (result - 1);
 }
 
 void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
@@ -361,44 +367,36 @@ void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
     menu.addItem (1, "Delete point");
     menu.addSubMenu ("Segment curve", curveMenu);
 
-    juce::Component::SafePointer<CcLane> safe (this);
-    const int cc = ccNumber_, ch = channel_;
-    menu.showMenuAsync (
-        juce::PopupMenu::Options().withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
-        [safe, cc, ch, pointIndex] (int result)
+    const int result = menu.showAt (juce::Rectangle<int> (screenPos.x, screenPos.y, 1, 1));
+    if (result <= 0) return;
+
+    auto* region = resolveBoundRegion();
+    if (region == nullptr) return;
+    auto pts = copyLanePoints (*region, ccNumber_, channel_);
+    if (pointIndex < 0 || pointIndex >= (int) pts.size()) return;
+
+    if (result == 1)
+    {
+        pts.erase (pts.begin() + (long) pointIndex);
+    }
+    else
+    {
+        CurveAlgorithm algo = CurveAlgorithm::Linear;
+        switch (result)
         {
-            if (result <= 0) return;
-            auto* self = safe.getComponent();
-            if (self == nullptr) return;
-            auto* region = self->resolveBoundRegion();
-            if (region == nullptr) return;
+            case 101: algo = CurveAlgorithm::Exponent;     break;
+            case 102: algo = CurveAlgorithm::SuperEllipse; break;
+            case 103: algo = CurveAlgorithm::Vital;        break;
+            case 104: algo = CurveAlgorithm::Logarithmic;  break;
+            case 105: algo = CurveAlgorithm::Pulse;        break;
+            default:  algo = CurveAlgorithm::Linear;       break;
+        }
+        pts[(size_t) pointIndex].curve.algorithm = algo;
+    }
 
-            auto pts = copyLanePoints (*region, cc, ch);
-            if (pointIndex < 0 || pointIndex >= (int) pts.size()) return;
-
-            if (result == 1)
-            {
-                pts.erase (pts.begin() + (long) pointIndex);
-            }
-            else
-            {
-                CurveAlgorithm algo = CurveAlgorithm::Linear;
-                switch (result)
-                {
-                    case 101: algo = CurveAlgorithm::Exponent;     break;
-                    case 102: algo = CurveAlgorithm::SuperEllipse; break;
-                    case 103: algo = CurveAlgorithm::Vital;        break;
-                    case 104: algo = CurveAlgorithm::Logarithmic;  break;
-                    case 105: algo = CurveAlgorithm::Pulse;        break;
-                    default:  algo = CurveAlgorithm::Linear;       break;
-                }
-                pts[(size_t) pointIndex].curve.algorithm = algo;
-            }
-
-            region->setCcLane (cc, ch, pts);
-            self->parent_.notifyRegionEdited();
-            self->repaint();
-        });
+    region->setCcLane (ccNumber_, channel_, pts);
+    parent_.notifyRegionEdited();
+    repaint();
 }
 
 } // namespace element

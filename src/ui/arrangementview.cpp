@@ -4456,44 +4456,43 @@ private:
         menu.addItem (1, "Delete point");
         menu.addSubMenu ("Segment curve", curveMenu);
 
-        menu.showMenuAsync (
-            juce::PopupMenu::Options().withTargetScreenArea (screenAnchor),
-            [this, trackId, regionId, pointIndex] (int result)
+        /* Synchronous showAt -- mouse-usable + positions at the cursor
+         * (the showMenuAsync + withTargetScreenArea variant mis-rendered
+         * detached at the window bottom under this windowing setup). */
+        const int result = menu.showAt (screenAnchor);
+        if (result <= 0) return;
+        auto* engine = owner.activeAutomationEngine();
+        if (engine == nullptr) return;
+        auto* track  = engine->findTrackById (trackId);
+        auto* region = regionById (track, regionId);
+        if (region == nullptr) return;
+
+        auto pts = region->loadSnapshot() ? *region->loadSnapshot()
+                                          : AutomationRegion::PointList {};
+        if (pointIndex < 0 || pointIndex >= (int) pts.size()) return;
+
+        if (result == 1)
+        {
+            pts.erase (pts.begin() + (long) pointIndex);
+        }
+        else
+        {
+            CurveAlgorithm algo = CurveAlgorithm::Linear;
+            switch (result)
             {
-                if (result <= 0) return;
-                auto* engine = owner.activeAutomationEngine();
-                if (engine == nullptr) return;
-                auto* track  = engine->findTrackById (trackId);
-                auto* region = regionById (track, regionId);
-                if (region == nullptr) return;
+                case 101: algo = CurveAlgorithm::Exponent;     break;
+                case 102: algo = CurveAlgorithm::SuperEllipse; break;
+                case 103: algo = CurveAlgorithm::Vital;        break;
+                case 104: algo = CurveAlgorithm::Logarithmic;  break;
+                case 105: algo = CurveAlgorithm::Pulse;        break;
+                default:  algo = CurveAlgorithm::Linear;       break;
+            }
+            pts[(size_t) pointIndex].curve.algorithm = algo;
+        }
 
-                auto pts = region->loadSnapshot() ? *region->loadSnapshot()
-                                                  : AutomationRegion::PointList {};
-                if (pointIndex < 0 || pointIndex >= (int) pts.size()) return;
-
-                if (result == 1)
-                {
-                    pts.erase (pts.begin() + (long) pointIndex);
-                }
-                else
-                {
-                    CurveAlgorithm algo = CurveAlgorithm::Linear;
-                    switch (result)
-                    {
-                        case 101: algo = CurveAlgorithm::Exponent;     break;
-                        case 102: algo = CurveAlgorithm::SuperEllipse; break;
-                        case 103: algo = CurveAlgorithm::Vital;        break;
-                        case 104: algo = CurveAlgorithm::Logarithmic;  break;
-                        case 105: algo = CurveAlgorithm::Pulse;        break;
-                        default:  algo = CurveAlgorithm::Linear;       break;
-                    }
-                    pts[(size_t) pointIndex].curve.algorithm = algo;
-                }
-
-                region->setPoints (pts);
-                persistAutomationEdit();
-                repaint();
-            });
+        region->setPoints (pts);
+        persistAutomationEdit();
+        repaint();
     }
 
     /** Locate the overlay row at body-coord y for lane `laneIdx`. */
@@ -7444,7 +7443,7 @@ void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
     {
         juce::PopupMenu m;
         m.addItem (1, "No automatable parameters in the graph", false, false);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (screenAnchor));
+        m.showAt (screenAnchor);
         return;
     }
 
@@ -7484,23 +7483,21 @@ void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
         menu.addSubMenu (nodeName, sub);
     }
 
-    menu.showMenuAsync (
-        juce::PopupMenu::Options().withTargetScreenArea (screenAnchor),
-        [this, targets, laneId] (int result)
+    /* Synchronous showAt -- the reliable pattern in this build (mouse
+     * works, positions at the anchor).  withTargetScreenArea + async
+     * mis-rendered detached at the window bottom under this windowing. */
+    const int result = menu.showAt (screenAnchor);
+    if (result <= 0 || result > (int) targets.size()) return;
+    const auto& t = targets[(size_t) (result - 1)];
+    /* Confirm the lane still exists; ownerLaneId is presentation only,
+     * the target node is graph-wide. */
+    for (const auto& l : lanes_)
+        if (l.id == laneId)
         {
-            if (result <= 0 || result > (int) targets.size()) return;
-            const auto& t = targets[(size_t) (result - 1)];
-            /* Confirm the lane still exists (lanes_ may have changed while
-             * the async menu was open); ownerLaneId is presentation only,
-             * the target node is graph-wide. */
-            for (const auto& l : lanes_)
-                if (l.id == laneId)
-                {
-                    addAutomationLane (
-                        automation::makeNodeParamKey (t.nodeId, t.paramIndex), laneId);
-                    break;
-                }
-        });
+            addAutomationLane (
+                automation::makeNodeParamKey (t.nodeId, t.paramIndex), laneId);
+            break;
+        }
 }
 
 void ArrangementView::writeMarkersToSessionTree (juce::ValueTree& arrTree)
