@@ -66,13 +66,19 @@ private:
     int ccNumber_ { 1 };   // mod wheel
     int channel_  { 1 };
 
-    /* In-flight point drag.  Index into the lane's sorted point list;
-     * x-moves clamp between neighbours so the index stays stable. */
+    /* In-flight drag.  Two modes:
+     *   MovePoint  -- drag a breakpoint (pointIndex), x clamped between
+     *                 neighbours so the index stays stable.
+     *   ShapeCurve -- drag a segment's midpoint handle (segmentIndex) to
+     *                 bend the curve (sets the from-point's curviness). */
+    enum class DragMode { None, MovePoint, ShapeCurve };
     struct Drag
     {
-        bool active     { false };
+        DragMode mode   { DragMode::None };
         int  pointIndex { -1 };
+        int  segmentIndex { -1 };
         bool moved      { false };
+        bool active() const noexcept { return mode != DragMode::None; }
     };
     Drag drag_;
 
@@ -94,6 +100,13 @@ private:
      *  lane's points, or -1.  Reads the region snapshot. */
     int findPointNear (const MidiNoteRegion& region, int x, int y,
                        int pxPerBeat) const noexcept;
+
+    /** Index of the SEGMENT (from-point index) whose midpoint handle is
+     *  within grab range of (x,y), or -1.  Used to start a curve-shaping
+     *  drag.  Flat segments (equal endpoint values) report no handle --
+     *  there's nothing to bend. */
+    int findMidpointNear (const MidiNoteRegion& region, int x, int y,
+                          int pxPerBeat) const noexcept;
 
     void showSelectorMenu (juce::Point<int> screenPos);
     void showPointMenu (int pointIndex, juce::Point<int> screenPos);

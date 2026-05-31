@@ -138,6 +138,39 @@ int CcLane::findPointNear (const MidiNoteRegion& region, int x, int y,
     return (best >= 0 && bestD <= kHandleGrabPx) ? best : -1;
 }
 
+namespace {
+/* Value of a segment at fraction f in [0,1], mirroring paint +
+ * sampleAtBeats: evaluate() is value-normalised, mapped onto [lo,hi]. */
+double segValueAt (const AutomationPoint& from, const AutomationPoint& to, double f)
+{
+    const bool startHigher = from.valueNormalized > to.valueNormalized;
+    const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
+    const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
+    const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
+    return lo + yn * (hi - lo);
+}
+} // namespace
+
+int CcLane::findMidpointNear (const MidiNoteRegion& region, int x, int y,
+                              int pxPerBeat) const noexcept
+{
+    const auto pts = copyLanePoints (region, ccNumber_, channel_);
+    int    best  = -1;
+    double bestD = 1.0e9;
+    for (size_t i = 0; i + 1 < pts.size(); ++i)
+    {
+        /* Flat segment -> no bendable midpoint handle. */
+        if (std::abs (pts[i].valueNormalized - pts[i + 1].valueNormalized) < 1e-6)
+            continue;
+        const double midBeat = (pts[i].tBeats + pts[i + 1].tBeats) * 0.5;
+        const double px = xForBeat (midBeat, pxPerBeat);
+        const double py = yForValue (segValueAt (pts[i], pts[i + 1], 0.5));
+        const double d  = juce::jmax (std::abs (px - x), std::abs (py - y));
+        if (d < bestD) { bestD = d; best = (int) i; }
+    }
+    return (best >= 0 && bestD <= kHandleGrabPx) ? best : -1;
+}
+
 void CcLane::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff'0e'0e'10));
@@ -242,7 +275,21 @@ void CcLane::paint (juce::Graphics& g)
         g.strokePath (path, juce::PathStrokeType (1.4f));
     }
 
-    /* Breakpoint handles. */
+    /* Segment midpoint handles -- small hollow circles the user drags
+     * vertically to bend the curve (sets the from-point's curviness).
+     * Skipped on flat segments (nothing to shape). */
+    for (size_t i = 0; i + 1 < pts.size(); ++i)
+    {
+        if (std::abs (pts[i].valueNormalized - pts[i + 1].valueNormalized) < 1e-6)
+            continue;
+        const double midBeat = (pts[i].tBeats + pts[i + 1].tBeats) * 0.5;
+        const float mx = (float) xForBeat (midBeat, pxPerBeat);
+        const float my = yForValue (segValueAt (pts[i], pts[i + 1], 0.5));
+        g.setColour (curveCol.withAlpha (0.5f));
+        g.drawEllipse (mx - 3.0f, my - 3.0f, 6.0f, 6.0f, 1.2f);
+    }
+
+    /* Breakpoint handles (filled squares, on top of midpoint rings). */
     g.setColour (curveCol.brighter (0.5f));
     for (const auto& p : pts)
     {
@@ -276,34 +323,50 @@ void CcLane::mouseDown (const juce::MouseEvent& e)
     }
     if (! e.mods.isLeftButtonDown()) return;
 
-    auto pts = copyLanePoints (*region, ccNumber_, channel_);
-    int pointIndex = existing;
-
-    if (existing < 0)
+    /* Priority: existing breakpoint (move) > segment midpoint (shape
+     * curve) > empty area (add a breakpoint + move). */
+    if (existing >= 0)
     {
-        /* Add a breakpoint at the snapped beat + clicked value. */
-        const double rawBeat = grid->snapBeat (beatForX (e.x, pxPerBeat));
-        const double local   = juce::jlimit (0.0, region->lengthBeats, rawBeat);
-        AutomationPoint np;
-        np.tBeats          = local;
-        np.valueNormalized = valueForY (e.y);
-        size_t insertIdx = 0;
-        while (insertIdx < pts.size() && pts[insertIdx].tBeats < local)
-            ++insertIdx;
-        pts.insert (pts.begin() + (long) insertIdx, np);
-        region->setCcLane (ccNumber_, channel_, pts);
-        pointIndex = (int) insertIdx;
+        drag_.mode       = DragMode::MovePoint;
+        drag_.pointIndex = existing;
+        drag_.moved      = false;
+        repaint();
+        return;
     }
 
-    drag_.active     = true;
-    drag_.pointIndex = pointIndex;
-    drag_.moved      = (existing < 0);   // an add always commits
+    const int seg = findMidpointNear (*region, e.x, e.y, pxPerBeat);
+    if (seg >= 0)
+    {
+        drag_.mode         = DragMode::ShapeCurve;
+        drag_.segmentIndex = seg;
+        drag_.moved        = false;
+        repaint();
+        return;
+    }
+
+    /* Empty area -> add a breakpoint at the snapped beat + clicked value,
+     * then drag it. */
+    auto pts = copyLanePoints (*region, ccNumber_, channel_);
+    const double rawBeat = grid->snapBeat (beatForX (e.x, pxPerBeat));
+    const double local   = juce::jlimit (0.0, region->lengthBeats, rawBeat);
+    AutomationPoint np;
+    np.tBeats          = local;
+    np.valueNormalized = valueForY (e.y);
+    size_t insertIdx = 0;
+    while (insertIdx < pts.size() && pts[insertIdx].tBeats < local)
+        ++insertIdx;
+    pts.insert (pts.begin() + (long) insertIdx, np);
+    region->setCcLane (ccNumber_, channel_, pts);
+
+    drag_.mode       = DragMode::MovePoint;
+    drag_.pointIndex = (int) insertIdx;
+    drag_.moved      = true;   // an add always commits
     repaint();
 }
 
 void CcLane::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! drag_.active || drag_.pointIndex < 0) return;
+    if (! drag_.active()) return;
     auto* region = resolveBoundRegion();
     if (region == nullptr) return;
     auto* grid = parent_.getGrid();
@@ -312,18 +375,47 @@ void CcLane::mouseDrag (const juce::MouseEvent& e)
     if (pxPerBeat <= 0) return;
 
     auto pts = copyLanePoints (*region, ccNumber_, channel_);
-    const int i = drag_.pointIndex;
-    if (i < 0 || i >= (int) pts.size()) return;
 
-    const double rawBeat = grid->snapBeat (beatForX (e.x, pxPerBeat));
-    double local = juce::jlimit (0.0, region->lengthBeats, rawBeat);
+    if (drag_.mode == DragMode::MovePoint)
+    {
+        const int i = drag_.pointIndex;
+        if (i < 0 || i >= (int) pts.size()) return;
 
-    constexpr double eps = 1.0e-4;
-    if (i > 0)                    local = juce::jmax (local, pts[(size_t) i - 1].tBeats + eps);
-    if (i < (int) pts.size() - 1) local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
+        const double rawBeat = grid->snapBeat (beatForX (e.x, pxPerBeat));
+        double local = juce::jlimit (0.0, region->lengthBeats, rawBeat);
 
-    pts[(size_t) i].tBeats          = local;
-    pts[(size_t) i].valueNormalized = valueForY (e.y);
+        constexpr double eps = 1.0e-4;
+        if (i > 0)                    local = juce::jmax (local, pts[(size_t) i - 1].tBeats + eps);
+        if (i < (int) pts.size() - 1) local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
+
+        pts[(size_t) i].tBeats          = local;
+        pts[(size_t) i].valueNormalized = valueForY (e.y);
+    }
+    else if (drag_.mode == DragMode::ShapeCurve)
+    {
+        const int i = drag_.segmentIndex;
+        if (i < 0 || i + 1 >= (int) pts.size()) return;
+
+        const double v0 = pts[(size_t) i].valueNormalized;
+        const double v1 = pts[(size_t) i + 1].valueNormalized;
+        const double lo = juce::jmin (v0, v1);
+        const double hi = juce::jmax (v0, v1);
+        if (hi - lo < 1e-6) return;   // flat: nothing to bend
+
+        /* Map the cursor's value onto the segment's [lo,hi] range, then to
+         * a curviness via the approximate inverse of evaluate()'s midpoint
+         * response (Exponent: midpoint value-norm spans ~[0.034,0.966] as
+         * curviness goes [-1,+1]; c>0 bulges the midpoint toward hi for
+         * BOTH ascending + descending segments).  Drag up -> bulge up. */
+        const double midNorm = juce::jlimit (0.0, 1.0,
+                                             (valueForY (e.y) - lo) / (hi - lo));
+        const double c = juce::jlimit (-1.0, 1.0, (midNorm - 0.5) / 0.466);
+        pts[(size_t) i].curve.algorithm = (std::abs (c) < 1e-3)
+                                              ? CurveAlgorithm::Linear
+                                              : CurveAlgorithm::Exponent;
+        pts[(size_t) i].curve.curviness = c;
+    }
+
     region->setCcLane (ccNumber_, channel_, pts);
     drag_.moved = true;
     repaint();
@@ -331,7 +423,7 @@ void CcLane::mouseDrag (const juce::MouseEvent& e)
 
 void CcLane::mouseUp (const juce::MouseEvent&)
 {
-    const bool committed = drag_.active && drag_.moved;
+    const bool committed = drag_.active() && drag_.moved;
     drag_ = Drag {};
     if (committed)
         parent_.notifyRegionEdited();   // persist (flushLanesToSession) + repaint
