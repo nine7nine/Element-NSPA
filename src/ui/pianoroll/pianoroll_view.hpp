@@ -18,6 +18,7 @@ class PianoRollKeyboard;
 class PianoRollGrid;
 class QuantizeDialog;
 class VelocityLane;
+class CcLane;
 
 /** Bottom-attached piano-roll editor dock.  Peer to TrackerSideDock
  *  (right-attached) -- the bottom slot was reserved for piano-roll
@@ -175,6 +176,9 @@ private:
      * axes during edits. */
     BlockToolButton                     yZoomOutBtn_    { "Y-" };
     BlockToolButton                     yZoomInBtn_     { "Y+" };
+    /* Show/hide the MIDI CC automation lane (hidden by default so the
+     * grid keeps its full height until the user wants CC editing). */
+    BlockToolButton                     ccBtn_          { "CC" };
 
     /* Last-used dialog parameters.  Defaults match the C.1 toolbar
      * behaviour: full-amount quantize, +/- 10 velocity humanize, C
@@ -204,10 +208,15 @@ private:
      *  viewport's horizontal scroll via a Viewport listener so the
      *  lane stays aligned with the notes above. */
     std::unique_ptr<VelocityLane>       velocityLane_;
+    /** MIDI CC automation lane, stacked beneath the velocity lane.
+     *  Shares the grid's horizontal scroll + pxPerBeat via the same
+     *  ViewportScrollMirror. */
+    std::unique_ptr<CcLane>             ccLane_;
     class ViewportScrollMirror;
     std::unique_ptr<ViewportScrollMirror> scrollMirror_;
 
     static constexpr int kVelocityLaneH = 72;
+    static constexpr int kCcLaneH       = 84;
 
     void refreshLabel();
     void syncToolToggles();

@@ -9,6 +9,7 @@
 #include "ui/pianoroll/pianoroll_keyboard.hpp"
 #include "ui/pianoroll/pianoroll_grid.hpp"
 #include "ui/pianoroll/velocity_lane.hpp"
+#include "ui/pianoroll/cc_lane.hpp"
 #include "ui/fontcache.hpp"
 
 #include "services/timeline/midi_note_region.hpp"
@@ -22,8 +23,8 @@ namespace element {
 class PianoRollView::ViewportScrollMirror : public juce::ScrollBar::Listener
 {
 public:
-    ViewportScrollMirror (juce::Viewport& vp, VelocityLane& lane)
-        : viewport_ (vp), lane_ (lane)
+    ViewportScrollMirror (juce::Viewport& vp, VelocityLane& lane, CcLane& cc)
+        : viewport_ (vp), lane_ (lane), cc_ (cc)
     {
         viewport_.getHorizontalScrollBar().addListener (this);
     }
@@ -34,14 +35,19 @@ public:
     void scrollBarMoved (juce::ScrollBar* sb, double /*newRange*/) override
     {
         /* The HORIZONTAL scrollbar's range start IS the viewport's
-         * view-position-x.  Push it to the lane so it can re-paint
-         * lollipops aligned with the grid above. */
+         * view-position-x.  Push it to both under-grid lanes so they
+         * re-paint aligned with the notes above. */
         if (sb == &viewport_.getHorizontalScrollBar())
-            lane_.setScrollX (viewport_.getViewPositionX());
+        {
+            const int x = viewport_.getViewPositionX();
+            lane_.setScrollX (x);
+            cc_.setScrollX (x);
+        }
     }
 private:
     juce::Viewport& viewport_;
     VelocityLane&   lane_;
+    CcLane&         cc_;
 };
 
 /* Top-edge drag handle.  Vertical-only resize -- forwards the pixel
@@ -378,8 +384,29 @@ PianoRollView::PianoRollView (Services& services)
      * ScrollBar listener so lollipops stay aligned with notes. */
     velocityLane_ = std::make_unique<VelocityLane> (*this, services_);
     addAndMakeVisible (*velocityLane_);
+    /* CC automation lane, stacked beneath the velocity lane.  Hidden by
+     * default (added as a child component, not made visible) so the grid
+     * keeps its full height until the user toggles "CC" on -- the dock's
+     * 240 px default can't fit grid + both lanes at once. */
+    ccLane_ = std::make_unique<CcLane> (*this, services_);
+    addChildComponent (*ccLane_);
     scrollMirror_ = std::make_unique<ViewportScrollMirror> (*gridViewport_,
-                                                              *velocityLane_);
+                                                              *velocityLane_,
+                                                              *ccLane_);
+
+    /* "CC" toggle -- reveals/hides the CC lane + re-lays-out. */
+    ccBtn_.setClickingTogglesState (true);
+    ccBtn_.setToggleState (false, juce::dontSendNotification);
+    ccBtn_.setActiveTint (kActiveTint);
+    ccBtn_.onClick = [this]() {
+        if (ccLane_ != nullptr)
+        {
+            ccLane_->setVisible (ccBtn_.getToggleState());
+            resized();
+            if (ccLane_->isVisible()) ccLane_->repaint();
+        }
+    };
+    addAndMakeVisible (ccBtn_);
 
     /* Seed the grid with the comboBox's default snap pick so the
      * displayed division + the runtime division agree from frame 0. */
@@ -528,6 +555,8 @@ void PianoRollView::notifyRegionEdited()
     if (onRegionEdited) onRegionEdited();
     if (velocityLane_ != nullptr)
         velocityLane_->repaint();
+    if (ccLane_ != nullptr)
+        ccLane_->repaint();
 }
 
 void PianoRollView::setRegion (const juce::Uuid& regionId)
@@ -680,6 +709,8 @@ void PianoRollView::resized()
     layoutLeftBtn (yZoomOutBtn_, kZoomBtnW + 6);
     layoutLeftBtn (yZoomInBtn_,  kZoomBtnW + 6, 12);
 
+    layoutLeftBtn (ccBtn_,       kZoomBtnW + 6, 12);
+
     /* Close X on the far right. */
     closeBtn_.setBounds (header.removeFromRight (kHeaderH - 2 * yPad));
     header.removeFromRight (6);
@@ -712,6 +743,12 @@ void PianoRollView::resized()
      * extent as the grid viewport so its lollipops line up with the
      * notes above; horizontal scroll is mirrored from the viewport
      * via the ScrollBar listener installed in the ctor. */
+    /* CC lane sits at the very bottom, velocity lane just above it.
+     * Remove the CC strip FIRST (bottom-most), then velocity. */
+    juce::Rectangle<int> ccLaneArea;
+    if (ccLane_ != nullptr && ccLane_->isVisible())
+        ccLaneArea = r.removeFromBottom (kCcLaneH);
+
     juce::Rectangle<int> velLaneArea;
     if (velocityLane_ != nullptr && velocityLane_->isVisible())
         velLaneArea = r.removeFromBottom (kVelocityLaneH);
@@ -739,6 +776,15 @@ void PianoRollView::resized()
         velocityLane_->setScrollX (gridViewport_ != nullptr
                                      ? gridViewport_->getViewPositionX()
                                      : 0);
+    }
+
+    if (ccLane_ != nullptr && ! ccLaneArea.isEmpty())
+    {
+        ccLane_->setBounds (ccLaneArea.withLeft (r.getX())
+                                       .withWidth (r.getWidth()));
+        ccLane_->setScrollX (gridViewport_ != nullptr
+                                 ? gridViewport_->getViewPositionX()
+                                 : 0);
     }
 
     /* Grid height tracks the viewport's inner height so each pitch
