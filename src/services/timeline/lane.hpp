@@ -42,7 +42,13 @@ struct Lane
     juce::String  name;
     Kind          kind       { Kind::Audio };
     juce::Colour  colour     { 0xff'30'30'30 };
-    int           heightPx   { 60 };
+    /** Per-lane clip-strip height in pixels, OR 0 = "follow the arranger's
+     *  global vertical zoom" (the default).  Set non-zero only when the
+     *  user drags a lane's bottom edge to give it a custom height; sparse-
+     *  written so existing sessions (which never carried a height) keep
+     *  following the global zoom.  ArrangementView clamps to its
+     *  [kLaneHMin, kLaneHMax] range on read. */
+    int           heightPx   { 0 };
     bool          muted      { false };
     bool          soloed     { false };
     bool          armed      { false };

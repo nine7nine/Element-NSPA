@@ -26,7 +26,8 @@ juce::ValueTree Lane::toValueTree() const
      * MIDI.  Keeps existing sessions byte-identical on round-trip. */
     if (kind != Kind::Audio) v.setProperty (kKindAttr, (int) kind, nullptr);
     v.setProperty (kColourAttr, colour.toString(),         nullptr);
-    if (heightPx != 60)     v.setProperty (kHeightAttr, heightPx,             nullptr);
+    /* 0 == "follow global zoom" (default); only persist a real override. */
+    if (heightPx != 0)      v.setProperty (kHeightAttr, heightPx,             nullptr);
     if (muted)              v.setProperty (kMutedAttr,  true,                 nullptr);
     if (soloed)             v.setProperty (kSoloedAttr, true,                 nullptr);
     if (armed)              v.setProperty (kArmedAttr,  true,                 nullptr);
@@ -51,7 +52,7 @@ Lane Lane::fromValueTree (const juce::ValueTree& v)
         const juce::String s = v.getProperty (kColourAttr).toString();
         if (s.isNotEmpty()) l.colour = juce::Colour::fromString (s);
     }
-    l.heightPx       = (int)  v.getProperty (kHeightAttr, 60);
+    l.heightPx       = (int)  v.getProperty (kHeightAttr, 0);
     l.muted          = (bool) v.getProperty (kMutedAttr,  false);
     l.soloed         = (bool) v.getProperty (kSoloedAttr, false);
     l.armed          = (bool) v.getProperty (kArmedAttr,  false);

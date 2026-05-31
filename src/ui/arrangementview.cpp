@@ -280,9 +280,9 @@ public:
              * affected the static lane layout). */
             const Rectangle<int> hover = dropHoverLaneIdx_ >= 0
                 ? Rectangle<int> (kLabelW, laneClipTopY (dropHoverLaneIdx_),
-                                   getWidth() - kLabelW, laneClipStripH())
+                                   getWidth() - kLabelW, laneClipStripH (dropHoverLaneIdx_))
                 : Rectangle<int> (kLabelW, kRulerH + totalLanesHeight(),
-                                   getWidth() - kLabelW, laneClipStripH());
+                                   getWidth() - kLabelW, laneClipStripH (-1));
             g.setColour (Colours::limegreen.withAlpha (0.18f));
             g.fillRect (hover);
             g.setColour (Colours::limegreen);
@@ -345,7 +345,7 @@ public:
                 const int xs = kLabelW + (int) (newPos * kPxPerBeat);
                 const int xe = kLabelW + (int) ((newPos + mb.originalLen) * kPxPerBeat);
                 const int yT = laneClipTopY (destLaneIdx) + 4;
-                const Rectangle<int> ghost (xs, yT, juce::jmax (2, xe - xs), laneClipStripH() - 8);
+                const Rectangle<int> ghost (xs, yT, juce::jmax (2, xe - xs), laneClipStripH (destLaneIdx) - 8);
 
                 g.setColour (fillCol);
                 g.fillRect (ghost);
@@ -569,6 +569,19 @@ public:
         }
         if (e.y < kRulerH) return;   /* ruler click in label gutter */
 
+        /* Per-lane vertical resize: grabbing a lane's bottom edge in the
+         * label column begins a height drag (takes priority over the
+         * reorder / overlay handlers below).  Left-drag only. */
+        if (! e.mods.isPopupMenu())
+        {
+            const int rh = laneResizeHandleAt (e.x, e.y);
+            if (rh >= 0)
+            {
+                laneResize_ = LaneResize { true, rh, e.y, laneClipStripH (rh) };
+                return;
+            }
+        }
+
         const int laneIdx = rowAtY (e.y);
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
         auto& lane    = owner.lanes_.getReference (laneIdx);
@@ -577,7 +590,7 @@ public:
         /* Clicks below the clip strip land in this lane's automation
          * overlay stack -- route there (remove [x] now; point gestures
          * land in step 3) so the clip-strip region logic stays clip-only. */
-        if (e.y >= laneClipTopY (laneIdx) + laneClipStripH())
+        if (e.y >= laneClipTopY (laneIdx) + laneClipStripH (laneIdx))
         {
             handleAutomationOverlayMouseDown (e, laneIdx);
             return;
@@ -1056,7 +1069,7 @@ public:
         const int xs = kLabelW + (int) (r.positionBeats * kPxPerBeat);
         const int ws = juce::jmax (4, (int) (r.lengthBeats * kPxPerBeat));
         const int innerTopY = laneTopY + 4 + kTitleH;
-        const int innerH    = juce::jmax (1, laneClipStripH() - 8 - kTitleH);
+        const int innerH    = juce::jmax (1, laneClipStripH (laneIdx) - 8 - kTitleH);
         return Rectangle<int> (xs, innerTopY, ws, innerH).reduced (3, 2);
     }
 
@@ -1376,6 +1389,20 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        /* Per-lane vertical resize takes precedence once begun. */
+        if (laneResize_.active)
+        {
+            if (laneResize_.laneIdx >= 0 && laneResize_.laneIdx < owner.lanes_.size())
+            {
+                const int newH = juce::jlimit (kLaneHMin, kLaneHMax,
+                                               laneResize_.startH + (e.y - laneResize_.startY));
+                owner.lanes_.getReference (laneResize_.laneIdx).heightPx = newH;
+                resizeForLanes();
+                repaint();
+            }
+            return;
+        }
+
         /* Automation overlay point drag takes precedence -- it owns the
          * gesture once a breakpoint mousedown started it. */
         if (autoEdit_.active) { handleAutomationOverlayDrag (e); return; }
@@ -1686,6 +1713,13 @@ public:
 
     void mouseUp (const MouseEvent& e) override
     {
+        if (laneResize_.active)
+        {
+            laneResize_ = LaneResize {};
+            owner.flushLanesToSession();   // persist the new height (no undo step)
+            return;
+        }
+
         if (autoEdit_.active) { handleAutomationOverlayUp (e); return; }
 
         /* Finish envelope point drag -- sort the envelope (in case
@@ -1959,6 +1993,12 @@ public:
             setMouseCursor (juce::MouseCursor::NormalCursor);
             return;
         }
+        /* Per-lane vertical-resize handle (label column, lane bottom edge). */
+        if (laneResizeHandleAt (e.x, e.y) >= 0)
+        {
+            setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+            return;
+        }
         const int laneIdx = rowAtY (e.y);
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size())
         {
@@ -1977,13 +2017,13 @@ public:
             const int regionStartX = kLabelW + (int) (r.positionBeats * kPxPerBeat);
             const int regionEndX   = kLabelW + (int) (r.endBeats()    * kPxPerBeat);
             if (e.x >= regionEndX - kEdgeHandlePx && e.x <= regionEndX
-                && e.y >= laneTopY && e.y < laneTopY + laneClipStripH())
+                && e.y >= laneTopY && e.y < laneTopY + laneClipStripH (laneIdx))
             {
                 setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
                 return;
             }
             if (e.x >= regionStartX && e.x < regionEndX
-                && e.y >= laneTopY && e.y < laneTopY + laneClipStripH())
+                && e.y >= laneTopY && e.y < laneTopY + laneClipStripH (laneIdx))
             {
                 setMouseCursor (juce::MouseCursor::DraggingHandCursor);
                 return;
@@ -3753,9 +3793,43 @@ public:
     //    full height -- clip strip + the lane's expanded overlay sub-rows.
     //==========================================================================
 
-    /** Pixel height of the region/waveform clip strip at the top of every
-     *  lane.  Constant (the zoomable kLaneH); overlays stack below it. */
-    int laneClipStripH() const noexcept { return kLaneH; }
+    /** Pixel height of the region/waveform clip strip for lane `laneIdx`.
+     *  Per-lane: a lane with Lane.heightPx > 0 uses that custom height
+     *  (clamped to the zoom range); heightPx == 0 (the default) follows the
+     *  global kLaneH zoom.  Pass laneIdx < 0 (or out of range) to get the
+     *  global default -- used for the "drop a new lane below" preview.
+     *  Overlays stack below this strip within the lane's full height. */
+    int laneClipStripH (int laneIdx) const noexcept
+    {
+        if (laneIdx >= 0 && laneIdx < owner.lanes_.size())
+        {
+            const int h = owner.lanes_.getReference (laneIdx).heightPx;
+            if (h > 0) return juce::jlimit (kLaneHMin, kLaneHMax, h);
+        }
+        return kLaneH;
+    }
+
+    /* Per-lane vertical resize: grab a lane's clip-strip BOTTOM edge in the
+     * label column and drag.  Global Ctrl/Cmd+wheel zoom still scales lanes
+     * that follow it (heightPx == 0); a drag sets an explicit per-lane
+     * override (Lane.heightPx). */
+    static constexpr int kLaneResizeGrabPx = 4;
+    struct LaneResize { bool active = false; int laneIdx = -1; int startY = 0; int startH = 0; };
+    LaneResize laneResize_;
+
+    /** Lane whose clip-strip bottom edge is within grab range of body-coord
+     *  (x, y), or -1.  Label column only (x < kLabelW) so it never fights
+     *  region edits in the strip area. */
+    int laneResizeHandleAt (int x, int y) const noexcept
+    {
+        if (x >= kLabelW) return -1;
+        for (int i = 0; i < owner.lanes_.size(); ++i)
+        {
+            const int bottom = laneClipTopY (i) + laneClipStripH (i);
+            if (std::abs (y - bottom) <= kLaneResizeGrabPx) return i;
+        }
+        return -1;
+    }
 
     /* Automation overlay sub-row metrics.  An overlay row mirrors a lane
      * row's left-column / strip split: a kLabelW-wide label band (colour
@@ -3790,7 +3864,7 @@ public:
     /** Total vertical extent of lane `i` = clip strip + expanded overlays. */
     int laneFullHeight (int laneIdx) const noexcept
     {
-        return kLaneH + overlayStackHeight (laneIdx);
+        return laneClipStripH (laneIdx) + overlayStackHeight (laneIdx);
     }
 
     /** Body-coord Y of the top of lane `i`'s clip strip = ruler height plus
@@ -4144,7 +4218,7 @@ private:
     Rectangle<int> automationToggleRect (int laneIdx) const noexcept
     {
         const int h = 13;
-        const int y = laneClipTopY (laneIdx) + laneClipStripH() - h - 3;
+        const int y = laneClipTopY (laneIdx) + laneClipStripH (laneIdx) - h - 3;
         return Rectangle<int> (kLabelInsetX, y, 50, h);
     }
 
@@ -4182,7 +4256,7 @@ private:
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
         const auto laneId = owner.lanes_.getReference (laneIdx).id;
         if (owner.collapsedAutomationLanes_.count (laneId) > 0) return;
-        int y = laneClipTopY (laneIdx) + laneClipStripH();
+        int y = laneClipTopY (laneIdx) + laneClipStripH (laneIdx);
         for (int i = 0; i < owner.automationBindings_.size(); ++i)
         {
             const auto& b = owner.automationBindings_.getReference (i);
@@ -4822,7 +4896,7 @@ private:
         const auto& lane    = owner.lanes_.getReference (laneIdx);
         const auto& runtime = owner.laneRuntime_.getReference (laneIdx);
         const int y = laneClipTopY (laneIdx);
-        const Rectangle<int> bounds (0, y, getWidth(), laneClipStripH());
+        const Rectangle<int> bounds (0, y, getWidth(), laneClipStripH (laneIdx));
 
         /* Bitwig-style vertical tint strip on the LEFT edge of the
          * label area, low-alpha wash for the rest, monospace font
@@ -4846,7 +4920,7 @@ private:
          * removed per visual-design call 2026-05-24: only the label
          * column carries the gutter / tint identity; the strip body
          * stays uniform background with regions floating on top. */
-        const Rectangle<int> labelArea (0, y, kLabelW, laneClipStripH());
+        const Rectangle<int> labelArea (0, y, kLabelW, laneClipStripH (laneIdx));
         g.setColour (kGutterColour);
         g.fillRect (labelArea);
 
@@ -5000,7 +5074,7 @@ private:
          * lines.  Bar lines slightly darker than the body bg, beat
          * lines (1/4-note in 4/4) one notch dimmer below that so the
          * timeline tempo reads as a glanceable grid behind regions. */
-        const Rectangle<int> stripArea (kLabelW, y, getWidth() - kLabelW, laneClipStripH());
+        const Rectangle<int> stripArea (kLabelW, y, getWidth() - kLabelW, laneClipStripH (laneIdx));
 
         const int gridBeatsPerBar = owner.monitor_ != nullptr
             ? juce::jmax (1, (int) owner.monitor_->beatsPerBar.get())
