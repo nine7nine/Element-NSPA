@@ -311,6 +311,37 @@ private:
                               int                numSamples,
                               juce::MidiBuffer&  out) noexcept;
 
+    /** Emit the region's clip-local MIDI CC lanes for this block.  Walks
+     *  the block at a fixed sub-block stride, maps each stride point to
+     *  the region's local beat (loop modulo + startBeats), samples each
+     *  CC lane, and emits a controllerEvent when the value changed since
+     *  the last emit (per-(channel,cc) cache lastCcValue_).  Sample-
+     *  accurate to the stride; lock-free + alloc-free. */
+    void emitRegionCcInBlock (const RegionEntry& entry,
+                              double             blockStartBeat,
+                              double             samplesPerBeat,
+                              int                numSamples,
+                              juce::MidiBuffer&  out) noexcept;
+
+    /** Sub-block CC sampling stride.  64 samples == ~1.3 ms at 48 kHz,
+     *  matching AutomationEngine::kAutomationSubBlockStride.  CC is an
+     *  inherently coarse 7-bit stream so this resolution is ample. */
+    static constexpr int kCcSubBlockStride = 64;
+
+    /** Per-(channel, cc) last-emitted value cache (audio-thread-owned,
+     *  like held_).  -1 == nothing emitted yet.  Dedups CC across blocks
+     *  AND across regions/clips sharing the same destination -- the MIDI
+     *  CC output stream is per (channel, cc), so this is the correct key. */
+    static constexpr int kCcCacheSize = 16 * 128;
+    std::array<std::int8_t, (size_t) kCcCacheSize> lastCcValue_ {};
+
+    static int ccCacheIndex (int channel /*1..16*/, int cc /*0..127*/) noexcept
+    {
+        const int ch = juce::jlimit (1, 16, channel) - 1;
+        const int c  = juce::jlimit (0, 127, cc);
+        return ch * 128 + c;
+    }
+
     //==========================================================================
     // Session-view per-clip state.
 
@@ -430,6 +461,17 @@ private:
                                   double             samplesPerBeat,
                                   int                numSamples,
                                   juce::MidiBuffer&  out) noexcept;
+
+    /** Session-clip counterpart of emitRegionCcInBlock.  Samples the
+     *  clip region's CC lanes across the block at the sub-block stride,
+     *  mapping each point into clip-local beats (modulo clipLen) from the
+     *  slot's current localBeatPos.  Must run BEFORE emitSessionClipInBlock
+     *  advances localBeatPos. */
+    void emitSessionClipCcInBlock (SessionClipSlot& slot,
+                                    double             blockBeats,
+                                    double             samplesPerBeat,
+                                    int                numSamples,
+                                    juce::MidiBuffer&  out) noexcept;
 
     /** Audio-thread helper: emit NoteOff for every held bit on `slot`
      *  at the supplied sample offset.  Clears the slot's held bitset. */

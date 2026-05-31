@@ -31,6 +31,7 @@ void MidiPlayerNode::prepareToRender (double sampleRate, int maxBufferSize)
     lastPlayingState_  = false;
     lastMutedState_    = false;
     held_.reset();
+    lastCcValue_.fill ((std::int8_t) -1);   // CC dedup cache: nothing emitted yet
 }
 
 void MidiPlayerNode::releaseResources()
@@ -679,6 +680,8 @@ void MidiPlayerNode::render (RenderContext& rc)
             {
                 emitRegionInBlock (entry, blockStartBeat, blockEndBeat,
                                    samplesPerBeat, nsamples, *out);
+                emitRegionCcInBlock (entry, blockStartBeat, samplesPerBeat,
+                                     nsamples, *out);
                 continue;
             }
 
@@ -688,6 +691,8 @@ void MidiPlayerNode::render (RenderContext& rc)
 
             emitRegionInBlock (entry, blockStartBeat, blockEndBeat,
                                samplesPerBeat, nsamples, *out);
+            emitRegionCcInBlock (entry, blockStartBeat, samplesPerBeat,
+                                 nsamples, *out);
         }
     }
 
@@ -703,6 +708,10 @@ void MidiPlayerNode::render (RenderContext& rc)
         auto* slot = sessionClips_.getUnchecked (i);
         if (! slot->alive.load (std::memory_order_acquire)) continue;
         if (slot->state.load (std::memory_order_acquire) != kPlaying) continue;
+        /* CC first -- it reads localBeatPos as the block-start position,
+         * which emitSessionClipInBlock then advances. */
+        emitSessionClipCcInBlock (*slot, blockBeats, samplesPerBeat,
+                                  nsamples, *out);
         emitSessionClipInBlock (*slot, blockBeats, samplesPerBeat,
                                 nsamples, *out);
     }
@@ -715,12 +724,13 @@ void MidiPlayerNode::emitRegionInBlock (const RegionEntry& entry,
                                           int                numSamples,
                                           juce::MidiBuffer&  out) noexcept
 {
+    /* Advance the region's audio epoch FIRST so its trash sweep can
+     * reclaim displaced note + CC snapshots -- before the empty-notes
+     * early return, so a CC-only region (no notes) still sweeps. */
+    entry.region->advanceAudioEpoch();
+
     const auto* snap = entry.region->loadSnapshot();
     if (snap == nullptr || snap->empty()) return;
-
-    /* Advance the region's audio epoch so its trash sweep can
-     * reclaim displaced note snapshots. */
-    entry.region->advanceAudioEpoch();
 
     const double regionStart = entry.positionBeats;
     const double regionLen   = entry.lengthBeats;
@@ -904,6 +914,95 @@ void MidiPlayerNode::emitRegionInBlock (const RegionEntry& entry,
                                juce::jlimit (0, 127, n.pitch)),
                           sampleOffset);
             held_.reset ((std::size_t) heldIndex (n.channel, n.pitch));
+        }
+    }
+}
+
+void MidiPlayerNode::emitRegionCcInBlock (const RegionEntry& entry,
+                                          double             blockStartBeat,
+                                          double             samplesPerBeat,
+                                          int                numSamples,
+                                          juce::MidiBuffer&  out) noexcept
+{
+    const auto* cc = entry.region->loadCcSnapshot();
+    if (cc == nullptr || cc->empty() || samplesPerBeat <= 0.0) return;
+
+    const double regionStart = entry.positionBeats;
+    const double regionLen   = entry.lengthBeats;
+    const double srcOffset   = entry.startBeats;
+    const double loopPeriod  = (entry.looped && entry.loopLengthBeats > 0.0)
+                                  ? entry.loopLengthBeats
+                                  : regionLen;
+
+    /* Walk the block at the sub-block stride; map each stride point's
+     * transport beat to the region's source-local beat (loop modulo +
+     * left-trim offset), sample each lane, emit on change. */
+    for (int off = 0; off < numSamples; off += kCcSubBlockStride)
+    {
+        const double beat = blockStartBeat + (double) off / samplesPerBeat;
+        double lb = beat - regionStart;
+        if (entry.looped)
+        {
+            if (loopPeriod <= 0.0) continue;
+            lb = std::fmod (lb, loopPeriod);
+            if (lb < 0.0) lb += loopPeriod;
+        }
+        else if (lb < 0.0 || lb >= regionLen)
+        {
+            continue;   // stride point outside the (non-looped) region
+        }
+
+        const double srcLocal = srcOffset + lb;
+        for (const auto& lane : *cc)
+        {
+            const int ch  = juce::jlimit (1, 16, lane.channel);
+            const int v   = lane.ccValueAtBeats (srcLocal);
+            const int idx = ccCacheIndex (ch, lane.ccNumber);
+            if ((int) lastCcValue_[(size_t) idx] != v)
+            {
+                out.addEvent (juce::MidiMessage::controllerEvent (
+                                  ch, juce::jlimit (0, 127, lane.ccNumber), v),
+                              off);
+                lastCcValue_[(size_t) idx] = (std::int8_t) v;
+            }
+        }
+    }
+}
+
+void MidiPlayerNode::emitSessionClipCcInBlock (SessionClipSlot& slot,
+                                               double             /*blockBeats*/,
+                                               double             samplesPerBeat,
+                                               int                numSamples,
+                                               juce::MidiBuffer&  out) noexcept
+{
+    if (slot.region == nullptr || samplesPerBeat <= 0.0) return;
+    const auto* cc = slot.region->loadCcSnapshot();
+    if (cc == nullptr || cc->empty()) return;
+    const double clipLen = slot.region->lengthBeats;
+    if (clipLen <= 0.0) return;
+
+    /* Block-start position == current localBeatPos (note emission advances
+     * it AFTER this call).  Session clips are clip-local (srcOffset == 0). */
+    const double localStart = slot.localBeatPos.load (std::memory_order_relaxed);
+
+    for (int off = 0; off < numSamples; off += kCcSubBlockStride)
+    {
+        double lb = localStart + (double) off / samplesPerBeat;
+        lb = std::fmod (lb, clipLen);
+        if (lb < 0.0) lb += clipLen;
+
+        for (const auto& lane : *cc)
+        {
+            const int ch  = juce::jlimit (1, 16, lane.channel);
+            const int v   = lane.ccValueAtBeats (lb);
+            const int idx = ccCacheIndex (ch, lane.ccNumber);
+            if ((int) lastCcValue_[(size_t) idx] != v)
+            {
+                out.addEvent (juce::MidiMessage::controllerEvent (
+                                  ch, juce::jlimit (0, 127, lane.ccNumber), v),
+                              off);
+                lastCcValue_[(size_t) idx] = (std::int8_t) v;
+            }
         }
     }
 }
