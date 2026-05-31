@@ -7234,7 +7234,16 @@ juce::String ArrangementView::automationTargetDisplayName (
                     const auto& params = proc->getParameters (true);
                     if (idx >= 0 && idx < params.size())
                         if (auto p = params.getUnchecked (idx))
-                            return p->getName (48);
+                        {
+                            /* "Node: Param" -- in a modular graph the target
+                             * usually isn't the lane's own source node, so the
+                             * node name disambiguates which device is driven. */
+                            const juce::String nodeName = node.getDisplayName();
+                            const juce::String paramName = p->getName (40);
+                            return nodeName.isNotEmpty()
+                                       ? nodeName + ": " + paramName
+                                       : paramName;
+                        }
                 }
             }
         }
@@ -7370,6 +7379,47 @@ void ArrangementView::setLaneAutomationCollapsed (juce::Uuid laneId, bool collap
     }
 }
 
+namespace {
+/** One automatable destination discovered in the active graph: a node +
+ *  one of its automatable input params.  Flat list backs the picker; the
+ *  menu groups consecutive same-node entries into a submenu. */
+struct AutoParamTarget
+{
+    juce::Uuid   nodeId;
+    juce::String nodeName;
+    int          paramIndex = -1;
+    juce::String paramName;
+    juce::String paramLabel;
+};
+
+/** Recursively gather every automatable node param reachable from `root`
+ *  (descends into subgraphs).  Node-by-node order, so the picker can group
+ *  without re-sorting.  This is the modular-graph answer to "what can I
+ *  automate": ANY node's param, not just the lane's own source node -- the
+ *  overlay's ownerLaneId only governs which lane it's *drawn* under. */
+void collectAutomatableTargets (const Node& root, std::vector<AutoParamTarget>& out)
+{
+    const int n = root.getNumNodes();
+    for (int i = 0; i < n; ++i)
+    {
+        Node child = root.getNode (i);
+        if (! child.isValid()) continue;
+
+        if (auto* proc = child.getObject())
+        {
+            const auto params =
+                automation::enumerateAutomatableParams (proc->getParameters (true));
+            for (const auto& ap : params)
+                out.push_back ({ child.getUuid(), child.getDisplayName(),
+                                 ap.index, ap.name, ap.label });
+        }
+
+        if (child.isGraph())
+            collectAutomatableTargets (child, out);
+    }
+}
+} // namespace
+
 void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
                                                     juce::Rectangle<int> screenAnchor)
 {
@@ -7378,68 +7428,72 @@ void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
     auto sess = services_->context().session();
     if (sess == nullptr) return;
 
-    const auto& lane = lanes_.getReference (laneIdx);
+    const juce::Uuid laneId = lanes_.getReference (laneIdx).id;
 
-    /* Resolve the lane's target node, then enumerate its automatable
-     * INPUT params via the shared resolver helper.  Orphan lanes (no
-     * resolvable node) have nothing to bind. */
-    const Node node = findNodeByUuid (sess->getActiveGraph(), lane.targetNodeUuid);
-    if (! node.isValid())
+    /* Enumerate EVERY automatable param in the active graph (modular: the
+     * target is rarely the lane's own source node -- it's an effect / VST
+     * param somewhere downstream).  Grouped per node into submenus. */
+    std::vector<AutoParamTarget> targets;
+    collectAutomatableTargets (sess->getActiveGraph(), targets);
+
+    if (targets.empty())
     {
         juce::PopupMenu m;
-        m.addItem (1, "No automatable target on this lane", false, false);
-        m.showAt (screenAnchor);
+        m.addItem (1, "No automatable parameters in the graph", false, false);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (screenAnchor));
         return;
     }
 
-    auto* proc = node.getObject();
-    if (proc == nullptr) return;
-
-    const auto params = automation::enumerateAutomatableParams (proc->getParameters (true));
-    if (params.empty())
+    /* Pre-compute which targets are already bound on THIS lane so the menu
+     * can tick them (avoids silently double-adding the same destination). */
+    auto isBoundOnLane = [this, laneId] (const dsp::automation::AutomationTargetKey& key)
     {
-        juce::PopupMenu m;
-        m.addItem (1, "No automatable parameters", false, false);
-        m.showAt (screenAnchor);
-        return;
-    }
-
-    /* Already-bound params show a tick so the user sees what's live and
-     * doesn't double-add the same target on this lane. */
-    juce::PopupMenu menu;
-    for (size_t i = 0; i < params.size(); ++i)
-    {
-        const auto& ap = params[i];
-        const auto key = automation::makeNodeParamKey (lane.targetNodeUuid, ap.index);
-
-        bool alreadyBound = false;
+        auto* engine = activeAutomationEngine();
+        if (engine == nullptr) return false;
         for (const auto& b : automationBindings_)
-            if (b.ownerLaneId == lane.id)
-                if (auto* engine = activeAutomationEngine())
-                    if (auto* trk = engine->findTrackById (b.trackId))
-                        if (trk->targetKey == key) { alreadyBound = true; break; }
+            if (b.ownerLaneId == laneId)
+                if (auto* trk = engine->findTrackById (b.trackId))
+                    if (trk->targetKey == key) return true;
+        return false;
+    };
 
-        juce::String label = ap.name;
-        if (ap.label.isNotEmpty())
-            label += " (" + ap.label + ")";
-        menu.addItem ((int) i + 1, label, true, alreadyBound);
+    /* Menu item id == flat target index + 1.  Walk the (node-grouped) list,
+     * opening a fresh submenu each time the node id changes. */
+    juce::PopupMenu menu;
+    size_t i = 0;
+    while (i < targets.size())
+    {
+        const juce::Uuid nodeId = targets[i].nodeId;
+        juce::PopupMenu sub;
+        const juce::String nodeName = targets[i].nodeName.isNotEmpty()
+                                        ? targets[i].nodeName : juce::String ("Node");
+        while (i < targets.size() && targets[i].nodeId == nodeId)
+        {
+            const auto& t = targets[i];
+            const auto key = automation::makeNodeParamKey (nodeId, t.paramIndex);
+            juce::String label = t.paramName;
+            if (t.paramLabel.isNotEmpty())
+                label += " (" + t.paramLabel + ")";
+            sub.addItem ((int) i + 1, label, true, isBoundOnLane (key));
+            ++i;
+        }
+        menu.addSubMenu (nodeName, sub);
     }
 
-    const juce::Uuid laneId = lane.id;
     menu.showMenuAsync (
         juce::PopupMenu::Options().withTargetScreenArea (screenAnchor),
-        [this, params, laneId] (int result)
+        [this, targets, laneId] (int result)
         {
-            if (result <= 0 || result > (int) params.size()) return;
-            const auto& ap = params[(size_t) (result - 1)];
-            /* Re-resolve the lane by id -- lanes_ may have reordered
-             * while the async menu was open. */
+            if (result <= 0 || result > (int) targets.size()) return;
+            const auto& t = targets[(size_t) (result - 1)];
+            /* Confirm the lane still exists (lanes_ may have changed while
+             * the async menu was open); ownerLaneId is presentation only,
+             * the target node is graph-wide. */
             for (const auto& l : lanes_)
                 if (l.id == laneId)
                 {
                     addAutomationLane (
-                        automation::makeNodeParamKey (l.targetNodeUuid, ap.index),
-                        laneId);
+                        automation::makeNodeParamKey (t.nodeId, t.paramIndex), laneId);
                     break;
                 }
         });
