@@ -16,6 +16,12 @@
 #include "nodes/audioclip.hpp"
 #include "nodes/midiplayer.hpp"
 #include "nodes/tracker.hpp"
+#include "engine/graphnode.hpp"
+#include "dsp/automation/automation_region.hpp"
+#include "dsp/automation/automation_track.hpp"
+#include "services/automation/automation_engine.hpp"
+#include "services/automation/automation_session.hpp"
+#include "services/automation/automation_target_resolver.hpp"
 #include "services/arrangementtracksservice.hpp"
 #include "services/sources/sourceregistry.hpp"
 #include "services/timeline/audiolaneadapter.hpp"
@@ -6330,6 +6336,7 @@ void ArrangementView::loadLanesFromSession()
 {
     lanes_.clearQuick();
     markerTrack_.clear();
+    automationBindings_.clearQuick();
     if (services_ == nullptr) return;
     auto sess = services_->context().session();
     if (sess == nullptr) return;
@@ -6353,6 +6360,20 @@ void ArrangementView::loadLanesFromSession()
     auto markersTree = tree.getChildWithName ("markers");
     if (markersTree.isValid())
         markerTrack_.loadFromValueTree (markersTree);
+
+    /* Automation bindings sit beside <lanes> + <markers>.  Presentation
+     * only -- the engine tracks they reference (by trackId) are populated
+     * separately + view-independently at session-load (EngineService). */
+    auto bindingsTree = tree.getChildWithName ("automationBindings");
+    if (bindingsTree.isValid())
+    {
+        for (int i = 0; i < bindingsTree.getNumChildren(); ++i)
+        {
+            const auto bt = bindingsTree.getChild (i);
+            if (bt.getType() != juce::Identifier ("automationBinding")) continue;
+            automationBindings_.add (AutomationBinding::fromValueTree (bt));
+        }
+    }
 }
 
 /* Undoable snapshot action for ArrangementView mutations.  Stored
@@ -6437,6 +6458,7 @@ void ArrangementView::writeLanesToSession()
         lanesTree.appendChild (l.toValueTree(), nullptr);
 
     writeMarkersToSessionTree (tree);
+    writeAutomationBindingsToSessionTree (tree);
 }
 
 void ArrangementView::flushLanesToSession()
@@ -6459,8 +6481,113 @@ void ArrangementView::flushLanesToSession()
         lanesTree.appendChild (l.toValueTree(), nullptr);
 
     writeMarkersToSessionTree (tree);
+    writeAutomationBindingsToSessionTree (tree);
 
     lastCommittedSnapshot_ = lanes_;
+}
+
+void ArrangementView::writeAutomationBindingsToSessionTree (juce::ValueTree& arrTree)
+{
+    auto bindingsTree = arrTree.getOrCreateChildWithName ("automationBindings", nullptr);
+    bindingsTree.removeAllChildren (nullptr);
+    for (const auto& b : automationBindings_)
+        bindingsTree.appendChild (b.toValueTree(), nullptr);
+}
+
+automation::AutomationEngine* ArrangementView::activeAutomationEngine() const
+{
+    if (services_ == nullptr) return nullptr;
+    auto sess = services_->context().session();
+    if (sess == nullptr) return nullptr;
+    const Node active = sess->getActiveGraph();
+    if (! active.isValid()) return nullptr;
+    if (auto* gn = dynamic_cast<GraphNode*> (active.getObject()))
+        return gn->automationEngine();
+    return nullptr;
+}
+
+juce::String ArrangementView::automationTargetDisplayName (
+    const dsp::automation::AutomationTargetKey& key) const
+{
+    if (key.isMidi())
+        return "CC " + juce::String (key.midiCcNumber);
+
+    if (services_ != nullptr)
+    {
+        if (auto sess = services_->context().session())
+        {
+            const Node node = findNodeByUuid (sess->getActiveGraph(), key.nodeId);
+            if (node.isValid())
+            {
+                if (auto* proc = node.getObject())
+                {
+                    const int idx = automation::decodeNodeParamId (key.paramId);
+                    const auto& params = proc->getParameters (true);
+                    if (idx >= 0 && idx < params.size())
+                        if (auto p = params.getUnchecked (idx))
+                            return p->getName (48);
+                }
+            }
+        }
+    }
+    return "Param";
+}
+
+juce::Uuid ArrangementView::addAutomationLane (const dsp::automation::AutomationTargetKey& key,
+                                               juce::Uuid ownerLaneId)
+{
+    auto* engine = activeAutomationEngine();
+    if (engine == nullptr || services_ == nullptr) return juce::Uuid::null();
+    auto sess = services_->context().session();
+    if (sess == nullptr) return juce::Uuid::null();
+
+    using namespace element::dsp::automation;
+
+    /* Default span: cover existing arrangement content, min 16 beats, so
+     * the new curve is immediately visible + editable.  The user resizes
+     * / extends the region in the overlay editor. */
+    double span = 16.0;
+    for (const auto& l : lanes_)
+        for (const auto& r : l.playlist.regions())
+            span = juce::jmax (span, r.positionBeats + r.lengthBeats);
+
+    auto track = std::make_unique<AutomationTrack>();
+    track->id        = juce::Uuid();
+    track->targetKey = key;
+
+    /* Seed a flat default region at neutral 0.5 spanning the timeline. */
+    auto region = std::make_unique<AutomationRegion>();
+    region->id            = juce::Uuid();
+    region->positionBeats = 0.0;
+    region->lengthBeats   = span;
+    AutomationRegion::PointList pts {
+        { 0.0,  0.5, {} },
+        { span, 0.5, {} }
+    };
+    region->setPoints (pts);
+    track->addRegion (std::move (region));
+    track->setMode (AutomationMode::Read);
+
+    auto* live = engine->addTrack (std::move (track));
+    if (live == nullptr) return juce::Uuid::null();
+
+    /* Resolve + bind the target now (internal-node params resolve
+     * synchronously; async-loaded plugin params bind on a later pass). */
+    automation::rebindEngineTargets (*engine, sess->getActiveGraph());
+
+    AutomationBinding b;
+    b.id          = juce::Uuid();
+    b.trackId     = live->id;
+    b.ownerLaneId = ownerLaneId;
+    b.name        = automationTargetDisplayName (key);
+    automationBindings_.add (b);
+
+    /* Persist: bindings ride tags::arrangement (writeLanesToSession's
+     * binding write); engine tracks -> tags::automationTracks. */
+    writeLanesToSession();
+    automation::saveAutomationToSession (*engine, sess->data());
+
+    return b.id;
 }
 
 void ArrangementView::writeMarkersToSessionTree (juce::ValueTree& arrTree)

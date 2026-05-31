@@ -19,6 +19,7 @@
 #include "ui/blocktoolbutton.hpp"
 
 #include "services/timeline/audiolaneadapter.hpp"
+#include "services/timeline/automation_binding.hpp"
 #include "services/timeline/lane.hpp"
 #include "services/timeline/marker_track.hpp"
 
@@ -29,6 +30,9 @@ namespace element {
 class AudioClipNode;
 class MidiPlayerNode;
 class TrackerNode;
+
+namespace automation { class AutomationEngine; }
+namespace dsp::automation { struct AutomationTargetKey; }
 
 /** Main-window arrangement view.
  *
@@ -128,6 +132,19 @@ public:
      *  midiRegions and atomic-swaps it into the player node. */
     void publishMidiBindingsForLane (int laneIdx);
 
+    /** Create a timeline automation lane targeting `key`, optionally
+     *  nested as an overlay under the lane `ownerLaneId` (null = a
+     *  standalone/dedicated automation lane).  Allocates a song-owned
+     *  AutomationEngine track (seeded with a flat default region so the
+     *  curve is immediately editable), binds its target, records an
+     *  AutomationBinding for presentation, and persists both (bindings
+     *  -> tags::arrangement, engine tracks -> tags::automationTracks).
+     *  Returns the new binding's id, or null on failure (no active
+     *  graph / engine).  This is the data action the overlay UI's
+     *  "add automation" affordance calls. */
+    juce::Uuid addAutomationLane (const dsp::automation::AutomationTargetKey& key,
+                                  juce::Uuid ownerLaneId = juce::Uuid::null());
+
 private:
     void valueTreeChildAdded   (juce::ValueTree&, juce::ValueTree&) override;
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
@@ -209,6 +226,22 @@ private:
     void writeLanesToSession();
     void writeMarkersToSessionTree (juce::ValueTree& arrTree);
     void writeMarkersOnly();
+
+    /** Serialise automationBindings_ into the <automationBindings> child
+     *  of the arrangement tree (clears + rewrites).  Presentation only;
+     *  the curve data lives in the song-owned AutomationEngine
+     *  (tags::automationTracks).  Called from both write paths beside
+     *  the <lanes> write. */
+    void writeAutomationBindingsToSessionTree (juce::ValueTree& arrTree);
+
+    /** Resolve the active root graph's song-owned AutomationEngine, or
+     *  nullptr if there's no active graph / it isn't a GraphNode. */
+    automation::AutomationEngine* activeAutomationEngine() const;
+
+    /** Human-readable display name for an automation target (the param
+     *  name for node targets, "CC n" for MIDI targets).  Cached on the
+     *  AutomationBinding for the lane header. */
+    juce::String automationTargetDisplayName (const dsp::automation::AutomationTargetKey& key) const;
 
 public:
     /** Flush the current lanes_ snapshot to the session ValueTree
@@ -415,6 +448,14 @@ private:
      *  jump-to via Numpad 1-9 (in sorted order).  Sibling to <lanes>
      *  under tags::arrangement; loaded + written together. */
     MarkerTrack                    markerTrack_;
+
+    /** Presentation records for timeline automation lanes/overlays.
+     *  Curve data + target live in the song-owned AutomationEngine
+     *  (persisted under tags::automationTracks); these carry only the
+     *  arrangement-side presentation (placement, colour, height) + a
+     *  trackId reference.  Sibling to <lanes> under tags::arrangement;
+     *  loaded + written together. */
+    juce::Array<AutomationBinding> automationBindings_;
 
     bool lanesLoadedFromSession_ = false;
 
