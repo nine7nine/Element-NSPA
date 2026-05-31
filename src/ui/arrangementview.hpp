@@ -399,6 +399,10 @@ private:
     BlockToolButton toolSplitBtn_    { "Split" };
     BlockToolButton toolTrimBtn_     { "Trim" };
     BlockToolButton toolAuditionBtn_ { "Audit" };
+    /* Dedicated automation/envelope editing tool -- edits volume-envelope
+     * + automation-curve points without moving clips (distinct from
+     * Select). */
+    BlockToolButton toolEnvBtn_      { "Env" };
     BlockToolButton loopBtn_         { "Loop" };
     BlockToolButton zoomOutBtn_      { "-" };
     BlockToolButton zoomInBtn_       { "+" };

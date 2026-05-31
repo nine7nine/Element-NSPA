@@ -148,8 +148,13 @@ public:
      *                button is on; transport wraps in timerCallback)
      *   - Split    : click on region = split at click beat
      *   - Trim     : drag on region = resize only (no move)
-     *   - Audition : click on region = launch immediately, no drag */
-    enum class Tool { Select, Range, Split, Trim, Audition };
+     *   - Audition : click on region = launch immediately, no drag
+     *   - Env      : automation/envelope editing.  Clicks edit volume-
+     *                envelope + automation-curve points (add / move / shape
+     *                / delete); clips never move or resize.  A dedicated
+     *                tool so envelope editing isn't tangled with clip
+     *                move under Select (Ardour/Cubase-style). */
+    enum class Tool { Select, Range, Split, Trim, Audition, Env };
 
     void setActiveTool (Tool t)
     {
@@ -165,6 +170,7 @@ public:
             case Tool::Split:    setMouseCursor (juce::MouseCursor::IBeamCursor);             break;
             case Tool::Trim:     setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);   break;
             case Tool::Audition: setMouseCursor (juce::MouseCursor::PointingHandCursor);      break;
+            case Tool::Env:      setMouseCursor (juce::MouseCursor::CrosshairCursor);          break;
         }
         repaint();
     }
@@ -569,10 +575,10 @@ public:
         }
         if (e.y < kRulerH) return;   /* ruler click in label gutter */
 
-        /* Per-lane vertical resize: grabbing a lane's bottom edge in the
-         * label column begins a height drag (takes priority over the
-         * reorder / overlay handlers below).  Left-drag only. */
-        if (! e.mods.isPopupMenu())
+        /* Per-lane vertical resize: grab a lane's bottom divider + drag.
+         * Disabled in the Env tool, where the bottom edge is for envelope
+         * point editing instead (so resize never steals curve clicks). */
+        if (! e.mods.isPopupMenu() && activeTool_ != Tool::Env)
         {
             const int rh = laneResizeHandleAt (e.x, e.y);
             if (rh >= 0)
@@ -693,75 +699,81 @@ public:
         {
             if (! r.containsBeat (beat)) continue;
 
-            /* Envelope-point hit test (Select tool, audio regions
-             * only).  Takes priority over region-body click so
-             * clicking on a breakpoint dot starts a point drag
-             * instead of moving the region.  Right-click on a point
-             * opens the curve-type / delete menu. */
-            if (activeTool_ == Tool::Select
+            /* Env tool: volume-envelope editing on audio clips.  Owns the
+             * whole gesture -- grab a breakpoint, bend a segment midpoint,
+             * or click empty curve to add a point + drag it.  Never moves
+             * or selects the clip (that's the Select tool's job), so the
+             * two never fight. */
+            if (activeTool_ == Tool::Env
                 && runtime.isAudioLane()
-                && r.sequenceIdx < 0
-                && ! r.volumeEnvelope.empty())
+                && r.sequenceIdx < 0)
             {
+                lastInteractedLane_ = laneIdx;
+                setPrimarySelection (laneIdx, r.id);   // so handles draw
+                grabKeyboardFocus();
+
+                /* Breakpoint grab (right-click = curve/delete menu). */
                 const int ptIdx = envPointHitAt (laneIdx, r, e.x, e.y);
                 if (ptIdx >= 0)
                 {
                     const auto pointId = r.volumeEnvelope[(size_t) ptIdx].id;
                     if (e.mods.isPopupMenu())
-                    {
                         showEnvPointContextMenu (laneIdx, r.id, pointId);
-                        return;
+                    else
+                    {
+                        envGesture_.laneIdx    = laneIdx;
+                        envGesture_.regionId   = r.id;
+                        envGesture_.pointId    = pointId;
+                        envGesture_.dragActive = false;
                     }
-                    envGesture_.laneIdx    = laneIdx;
-                    envGesture_.regionId   = r.id;
-                    envGesture_.pointId    = pointId;
-                    envGesture_.dragActive = false;
-                    setPrimarySelection (laneIdx, r.id);
-                    lastInteractedLane_ = laneIdx;
-                    grabKeyboardFocus();
                     repaintLane (laneIdx);
                     return;
                 }
 
-                /* Midpoint-handle hit-test runs AFTER the breakpoint
-                 * hit-test so a click on the breakpoint dot itself
-                 * wins (breakpoints sit on top of midpoints when
-                 * they overlap visually).  Only active when the
-                 * region is already selected -- handles aren't drawn
-                 * otherwise. */
-                if (selectedRegion_ == r.id)
+                /* Segment-midpoint bend (right-click = reset to straight). */
+                const int segIdx = envSegmentMidHitAt (laneIdx, r, e.x, e.y);
+                if (segIdx >= 0)
                 {
-                    const int segIdx = envSegmentMidHitAt (laneIdx, r, e.x, e.y);
-                    if (segIdx >= 0)
+                    if (e.mods.isPopupMenu())
                     {
-                        if (e.mods.isPopupMenu())
-                        {
-                            /* Right-click on the midpoint = reset to
-                             * defaults (curve reverts to chord, enum
-                             * preset takes over).  No menu -- one
-                             * gesture, no extra clicks. */
-                            auto& laneMut = owner.lanes_.getReference (laneIdx);
-                            if (auto* rmut = laneMut.playlist.findRegion (r.id))
+                        auto& laneMut = owner.lanes_.getReference (laneIdx);
+                        if (auto* rmut = laneMut.playlist.findRegion (r.id))
+                            if (segIdx < (int) rmut->volumeEnvelope.size())
                             {
-                                if (segIdx < (int) rmut->volumeEnvelope.size())
-                                {
-                                    auto& seg = rmut->volumeEnvelope[(size_t) segIdx];
-                                    seg.curveOffsetT  = 0.5f;
-                                    seg.curveOffsetDb = 0.0f;
-                                    owner.writeLanesToSession();
-                                    repaintLane (laneIdx);
-                                }
+                                auto& seg = rmut->volumeEnvelope[(size_t) segIdx];
+                                seg.curveOffsetT  = 0.5f;
+                                seg.curveOffsetDb = 0.0f;
+                                owner.writeLanesToSession();
+                                repaintLane (laneIdx);
                             }
-                            return;
-                        }
+                    }
+                    else
+                    {
                         envMidGesture_.laneIdx    = laneIdx;
                         envMidGesture_.regionId   = r.id;
                         envMidGesture_.segIndex   = segIdx;
                         envMidGesture_.dragActive = false;
-                        grabKeyboardFocus();
-                        return;
+                    }
+                    return;
+                }
+
+                /* Empty curve area -> add a breakpoint at the click + grab
+                 * it for an immediate drag (Cubase draw behaviour). */
+                if (! e.mods.isPopupMenu())
+                {
+                    const double beatOff = juce::jlimit (0.0, r.lengthBeats,
+                                                         beat - r.positionBeats);
+                    const float  gainDb  = envYToGainDb (e.y, regionBodyRect (laneIdx, r));
+                    const auto newId = insertEnvelopePoint (laneIdx, r.id, beatOff, gainDb);
+                    if (! newId.isNull())
+                    {
+                        envGesture_.laneIdx    = laneIdx;
+                        envGesture_.regionId   = r.id;
+                        envGesture_.pointId    = newId;
+                        envGesture_.dragActive = false;
                     }
                 }
+                return;   // Env tool consumes the click; clip stays put
             }
 
             lastInteractedLane_ = laneIdx;
@@ -1158,13 +1170,13 @@ public:
      *  envelope was empty, ALSO seed start + end anchors at the
      *  region's static gainDb so the user gets a visible curve out
      *  of one double-click instead of an invisible single point. */
-    void insertEnvelopePoint (int laneIdx, juce::Uuid regionId,
-                                double beatOffset, float gainDb)
+    juce::Uuid insertEnvelopePoint (int laneIdx, juce::Uuid regionId,
+                                    double beatOffset, float gainDb)
     {
-        if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
+        if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return {};
         auto& lane = owner.lanes_.getReference (laneIdx);
         auto* r = lane.playlist.findRegion (regionId);
-        if (r == nullptr) return;
+        if (r == nullptr) return {};
 
         if (r->volumeEnvelope.empty())
         {
@@ -1183,10 +1195,12 @@ public:
         pt.beatOffset = juce::jlimit (0.0, r->lengthBeats, beatOffset);
         pt.gainDb     = juce::jlimit (-60.0f, 12.0f, gainDb);
         pt.curve      = EnvelopeCurve::Linear;
+        const auto newId = pt.id;
         r->volumeEnvelope.push_back (pt);
         r->sortEnvelope();
         owner.writeLanesToSession();
         repaintLane (laneIdx);
+        return newId;
     }
 
     /** Right-click context menu on an envelope point.  Curve type
@@ -1986,8 +2000,9 @@ public:
             setMouseCursor (juce::MouseCursor::NormalCursor);
             return;
         }
-        /* Per-lane vertical-resize handle (label column, lane bottom edge). */
-        if (laneResizeHandleAt (e.x, e.y) >= 0)
+        /* Per-lane vertical-resize handle (lane bottom divider) -- not in
+         * the Env tool (bottom edge edits envelope points there). */
+        if (activeTool_ != Tool::Env && laneResizeHandleAt (e.x, e.y) >= 0)
         {
             setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
             return;
@@ -3811,14 +3826,13 @@ public:
     LaneResize laneResize_;
 
     /** Lane whose clip-strip bottom border is within grab range of
-     *  body-coord (x, y), or -1.  Restricted to the track HEADER column
-     *  (x < kLabelW) -- like Ableton/Logic, you resize from the track
-     *  header, NOT over the clip area where the bottom edge would steal
-     *  region / volume-envelope-point clicks.  The visible full-width
-     *  divider line still shows where the boundary is. */
-    int laneResizeHandleAt (int x, int y) const noexcept
+     *  body-coord (x, y), or -1.  Spans the full track width so you can
+     *  grab the visible divider line anywhere along it.  The mouseDown
+     *  caller gates this OFF in the Env tool, where the bottom edge is for
+     *  envelope-point editing instead -- so resize never steals curve
+     *  clicks. */
+    int laneResizeHandleAt (int /*x*/, int y) const noexcept
     {
-        if (x >= kLabelW) return -1;
         for (int i = 0; i < owner.lanes_.size(); ++i)
         {
             const int bottom = laneClipTopY (i) + laneClipStripH (i);
@@ -5363,7 +5377,8 @@ private:
                     juce::jmax (0.5f, kCornerSize - 1.0f));
                 g.reduceClipRegion (clipPath);
                 paintVolumeEnvelope (g, bodyRect.reduced (3, 2),
-                                       r, borderTint, selected);
+                                       r, borderTint,
+                                       selected || activeTool_ == Tool::Env);
             }
 
             /* Loop boundary markers -- looped regions whose drawn
@@ -6095,6 +6110,7 @@ ArrangementView::ArrangementView()
     addAndMakeVisible (toolSplitBtn_);
     addAndMakeVisible (toolTrimBtn_);
     addAndMakeVisible (toolAuditionBtn_);
+    addAndMakeVisible (toolEnvBtn_);
     addAndMakeVisible (loopBtn_);
     addAndMakeVisible (snapBtn_);
     addAndMakeVisible (snapBox_);
@@ -6192,6 +6208,7 @@ ArrangementView::ArrangementView()
     toolSplitBtn_    .setClickingTogglesState (true);
     toolTrimBtn_     .setClickingTogglesState (true);
     toolAuditionBtn_ .setClickingTogglesState (true);
+    toolEnvBtn_      .setClickingTogglesState (true);
     toolSelectBtn_.setToggleState (true, juce::dontSendNotification);
 
     toolSelectBtn_  .onClick = [this]() { if (body_) body_->setActiveTool (Body::Tool::Select);   syncToolToggleStates(); };
@@ -6199,6 +6216,7 @@ ArrangementView::ArrangementView()
     toolSplitBtn_   .onClick = [this]() { if (body_) body_->setActiveTool (Body::Tool::Split);    syncToolToggleStates(); };
     toolTrimBtn_    .onClick = [this]() { if (body_) body_->setActiveTool (Body::Tool::Trim);     syncToolToggleStates(); };
     toolAuditionBtn_.onClick = [this]() { if (body_) body_->setActiveTool (Body::Tool::Audition); syncToolToggleStates(); };
+    toolEnvBtn_     .onClick = [this]() { if (body_) body_->setActiveTool (Body::Tool::Env);      syncToolToggleStates(); };
 
     loopBtn_.setClickingTogglesState (true);
     loopBtn_.setToggleState (false, juce::dontSendNotification);
@@ -6212,6 +6230,7 @@ ArrangementView::ArrangementView()
     toolSplitBtn_   .setActiveTint (kActiveTint);
     toolTrimBtn_    .setActiveTint (kActiveTint);
     toolAuditionBtn_.setActiveTint (kActiveTint);
+    toolEnvBtn_     .setActiveTint (kActiveTint);
     loopBtn_        .setActiveTint (kActiveTint);
     snapBtn_        .setActiveTint (kActiveTint);
     snapEventsBtn_  .setActiveTint (kActiveTint);
@@ -6505,7 +6524,8 @@ void ArrangementView::resized()
     toolRangeBtn_   .setBounds (top.removeFromLeft (72)); top.removeFromLeft (2);
     toolSplitBtn_   .setBounds (top.removeFromLeft (64)); top.removeFromLeft (2);
     toolTrimBtn_    .setBounds (top.removeFromLeft (64)); top.removeFromLeft (2);
-    toolAuditionBtn_.setBounds (top.removeFromLeft (72)); top.removeFromLeft (12);
+    toolAuditionBtn_.setBounds (top.removeFromLeft (72)); top.removeFromLeft (2);
+    toolEnvBtn_     .setBounds (top.removeFromLeft (60)); top.removeFromLeft (12);
 
     loopBtn_        .setBounds (top.removeFromLeft (64)); top.removeFromLeft (12);
 
@@ -8455,6 +8475,7 @@ void ArrangementView::syncToolToggleStates()
     toolSplitBtn_   .setToggleState (tool == Body::Tool::Split,    juce::dontSendNotification);
     toolTrimBtn_    .setToggleState (tool == Body::Tool::Trim,     juce::dontSendNotification);
     toolAuditionBtn_.setToggleState (tool == Body::Tool::Audition, juce::dontSendNotification);
+    toolEnvBtn_     .setToggleState (tool == Body::Tool::Env,      juce::dontSendNotification);
 }
 
 void ArrangementView::onLoopToggled()
