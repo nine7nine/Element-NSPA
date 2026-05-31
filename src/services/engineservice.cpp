@@ -16,6 +16,8 @@
 #include "nodes/jackmidioutputnode.hpp"
 #endif
 #include "engine/rootgraph.hpp"
+#include "services/automation/automation_engine.hpp"
+#include "services/automation/automation_session.hpp"
 #include <element/engine.hpp>
 #include <element/ui.hpp>
 
@@ -811,6 +813,18 @@ void EngineService::deactivate()
         gui->closeAllPluginWindows();
     }
 
+    /* Flush the active graph's timeline automation into the session tree
+     * before it serializes (safety net for the close/save path; the
+     * arrangement view also flushes on edit).  Guard on a NON-empty
+     * engine: saveToValueTree removes the existing automationTracks child
+     * before writing, so an empty-engine flush would erase previously-
+     * saved automation. */
+    if (auto* holder = graphs->findActive())
+        if (auto* rg = holder->getRootGraph())
+            if (auto* ae = rg->automationEngine())
+                if (ae->numTracks() > 0)
+                    automation::saveAutomationToSession (*ae, session->data());
+
     session->saveGraphState();
     graphs->clear();
 
@@ -901,6 +915,19 @@ void EngineService::setRootNode (const Node& newRootNode)
     {
         DBG ("[element] no graph controller for node: " << newRootNode.getName());
     }
+
+    /* Timeline automation is song-owned (see memory
+     * project_automation_timeline_vs_clip_semantics): populate the active
+     * graph's AutomationEngine from the session + rebind targets now that
+     * the graph's nodes are instantiated.  View-INDEPENDENT -- runs
+     * whether or not the arrangement view is ever opened.  Guard on an
+     * empty engine so re-activating a graph doesn't clobber runtime
+     * edits (single active graph; multi-graph automation is future). */
+    if (auto* rg = holder->getRootGraph())
+        if (auto* ae = rg->automationEngine())
+            if (ae->numTracks() == 0)
+                if (auto sess = context().session())
+                    automation::restoreAutomationFromSession (*ae, sess->data(), newRootNode);
 
     engine->refreshSession();
 }
