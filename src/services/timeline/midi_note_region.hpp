@@ -4,6 +4,7 @@
 #pragma once
 
 #include "services/timeline/midi_note.hpp"
+#include "services/timeline/midi_cc_lane.hpp"
 
 #include <element/juce/core.hpp>
 #include <element/juce/data_structures.hpp>
@@ -209,10 +210,39 @@ public:
      *  paths that want to pre-stamp ids for undo before publishing. */
     std::uint64_t nextNoteId() noexcept;
 
+    //==========================================================================
+    // Clip-local MIDI CC automation lanes.  Parallel COW snapshot to the
+    // note list (own atomic ptr + trash deque, sharing audioEpoch_).  The
+    // MidiPlayerNode emits these alongside notes; the piano-roll CC lane
+    // editor mutates them.  Reuses dsp::automation curve points so the
+    // editor shares the timeline-overlay curve paint/eval code.
+
+    using CcLaneList = std::vector<MidiCcLane>;
+
+    /** Load the active immutable CC-lane snapshot.  Audio thread holds it
+     *  for one render block.  Never null after construction. */
+    const CcLaneList* loadCcSnapshot() const noexcept
+    {
+        return activeCc_.load (std::memory_order_acquire);
+    }
+
+    /** Replace the entire CC-lane set (each lane's points sorted by
+     *  tBeats).  Message-thread mutator; publishes a fresh snapshot. */
+    void setCcLanes (CcLaneList lanes);
+
+    /** Upsert one (ccNumber, channel) lane's point list -- replaces the
+     *  matching lane in place, or appends a new lane.  Empty `points`
+     *  removes the lane.  This is the piano-roll CC editor's primary
+     *  mutate path (one lane edited at a time). */
+    void setCcLane (int ccNumber, int channel, MidiCcLane::PointList points);
+
+    /** Remove the (ccNumber, channel) lane, if present. */
+    void removeCcLane (int ccNumber, int channel) noexcept;
+
     /** Drain the trash deque.  Called on the message thread by the
      *  arrangement view's AsyncUpdater tick (Phase 4 wiring) or by
      *  tests directly.  Safe to call from any thread that isn't the
-     *  audio thread.  Idempotent. */
+     *  audio thread.  Idempotent.  Drains BOTH the note and CC trash. */
     void sweepTrash() noexcept;
 
     //==========================================================================
@@ -253,6 +283,25 @@ private:
 
     /** UI-thread-owned deque of displaced snapshots awaiting reclaim. */
     std::deque<TrashEntry> trash_;
+
+    /** Live CC-lane snapshot (parallel to activeNotes_).  Non-null after
+     *  ctor; published via raw-ptr atomic swap, trash drained under the
+     *  same epoch gate as the note list. */
+    std::atomic<const CcLaneList*> activeCc_ { nullptr };
+
+    struct CcTrashEntry
+    {
+        std::unique_ptr<const CcLaneList> ptr;
+        std::uint64_t                     stampEpoch;
+    };
+    std::deque<CcTrashEntry> ccTrash_;
+
+    /** Publish a new CC-lane snapshot; old goes to ccTrash_ stamped at the
+     *  current epoch. */
+    void publishCcSnapshot (std::unique_ptr<CcLaneList> newSnap);
+
+    template <typename Mutator>
+    void mutateCcAndPublish (Mutator&& mutate);
 
     /** Per-region epoch counter.  Audio thread advances at block start. */
     std::atomic<std::uint64_t> audioEpoch_ { 0 };

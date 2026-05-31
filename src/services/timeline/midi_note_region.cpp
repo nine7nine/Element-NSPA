@@ -56,14 +56,17 @@ MidiNoteRegion::MidiNoteRegion()
      * snapshot is owned by the region until either replaced (old
      * goes to trash_) or the region is destroyed. */
     activeNotes_.store (new NoteList(), std::memory_order_release);
+    activeCc_.store (new CcLaneList(), std::memory_order_release);
 }
 
 MidiNoteRegion::~MidiNoteRegion()
 {
-    /* Reclaim the live snapshot.  trash_ unique_ptrs reclaim themselves
-     * at deque destruction. */
+    /* Reclaim the live snapshots.  trash_ / ccTrash_ unique_ptrs reclaim
+     * themselves at deque destruction. */
     if (auto* live = activeNotes_.exchange (nullptr, std::memory_order_acq_rel))
         delete live;
+    if (auto* liveCc = activeCc_.exchange (nullptr, std::memory_order_acq_rel))
+        delete liveCc;
 }
 
 std::unique_ptr<MidiNoteRegion> MidiNoteRegion::clone() const
@@ -81,6 +84,8 @@ std::unique_ptr<MidiNoteRegion> MidiNoteRegion::clone() const
 
     if (const auto* snap = loadSnapshot())
         out->setNotes (*snap);    /* setNotes makes its own copy + sorts */
+    if (const auto* ccSnap = loadCcSnapshot())
+        out->setCcLanes (*ccSnap); /* copies the lane vector */
     return out;
 }
 
@@ -202,6 +207,104 @@ void MidiNoteRegion::sweepTrash() noexcept
     const auto safeEpoch = audioEpoch_.load (std::memory_order_acquire);
     while (! trash_.empty() && trash_.front().stampEpoch < safeEpoch)
         trash_.pop_front();
+    while (! ccTrash_.empty() && ccTrash_.front().stampEpoch < safeEpoch)
+        ccTrash_.pop_front();
+}
+
+//==============================================================================
+
+namespace {
+/* CC lanes are sorted by (ccNumber, channel) so identity lookup +
+ * persistence order are stable. */
+inline bool ccLaneLess (const MidiCcLane& a, const MidiCcLane& b) noexcept
+{
+    if (a.ccNumber != b.ccNumber) return a.ccNumber < b.ccNumber;
+    return a.channel < b.channel;
+}
+
+inline void sortLanePoints (MidiCcLane& lane) noexcept
+{
+    std::sort (lane.points.begin(), lane.points.end(),
+               [] (const dsp::automation::AutomationPoint& a,
+                   const dsp::automation::AutomationPoint& b) noexcept
+               { return a.tBeats < b.tBeats; });
+}
+} // namespace
+
+void MidiNoteRegion::setCcLanes (CcLaneList lanes)
+{
+    for (auto& l : lanes)
+        sortLanePoints (l);
+    std::sort (lanes.begin(), lanes.end(), ccLaneLess);
+    publishCcSnapshot (std::make_unique<CcLaneList> (std::move (lanes)));
+}
+
+void MidiNoteRegion::setCcLane (int ccNumber, int channel, MidiCcLane::PointList points)
+{
+    mutateCcAndPublish ([&] (CcLaneList& copy)
+    {
+        auto it = std::find_if (copy.begin(), copy.end(),
+            [&] (const MidiCcLane& l) noexcept
+            { return l.ccNumber == ccNumber && l.channel == channel; });
+
+        if (points.empty())
+        {
+            /* Empty point set removes the lane entirely. */
+            if (it != copy.end())
+                copy.erase (it);
+            return;
+        }
+
+        std::sort (points.begin(), points.end(),
+                   [] (const dsp::automation::AutomationPoint& a,
+                       const dsp::automation::AutomationPoint& b) noexcept
+                   { return a.tBeats < b.tBeats; });
+
+        if (it != copy.end())
+        {
+            it->points = std::move (points);
+        }
+        else
+        {
+            MidiCcLane lane;
+            lane.ccNumber = ccNumber;
+            lane.channel  = channel;
+            lane.points   = std::move (points);
+            copy.push_back (std::move (lane));
+            std::sort (copy.begin(), copy.end(), ccLaneLess);
+        }
+    });
+}
+
+void MidiNoteRegion::removeCcLane (int ccNumber, int channel) noexcept
+{
+    mutateCcAndPublish ([&] (CcLaneList& copy)
+    {
+        copy.erase (std::remove_if (copy.begin(), copy.end(),
+                       [&] (const MidiCcLane& l) noexcept
+                       { return l.ccNumber == ccNumber && l.channel == channel; }),
+                    copy.end());
+    });
+}
+
+void MidiNoteRegion::publishCcSnapshot (std::unique_ptr<CcLaneList> newSnap)
+{
+    const CcLaneList* raw   = newSnap.release();
+    const auto        stamp = audioEpoch_.load (std::memory_order_acquire);
+    const CcLaneList* old   = activeCc_.exchange (raw, std::memory_order_acq_rel);
+    if (old != nullptr)
+        ccTrash_.push_back (CcTrashEntry { std::unique_ptr<const CcLaneList> (old), stamp });
+}
+
+template <typename Mutator>
+void MidiNoteRegion::mutateCcAndPublish (Mutator&& mutate)
+{
+    const auto* live = activeCc_.load (std::memory_order_acquire);
+    auto next = (live != nullptr)
+                  ? std::make_unique<CcLaneList> (*live)
+                  : std::make_unique<CcLaneList>();
+    mutate (*next);
+    publishCcSnapshot (std::move (next));
 }
 
 //==============================================================================
@@ -265,6 +368,14 @@ juce::ValueTree MidiNoteRegion::toValueTree() const
             v.appendChild (nv, nullptr);
         }
     }
+
+    /* CC lanes serialize as <cc> children alongside the <n> note
+     * children (MidiCcLane owns its own sparse-write); fromValueTree
+     * discriminates by tag.  Additive: older readers ignore <cc>. */
+    if (const auto* ccSnap = loadCcSnapshot())
+        for (const auto& lane : *ccSnap)
+            v.appendChild (lane.toValueTree(), nullptr);
+
     return v;
 }
 
@@ -294,25 +405,33 @@ std::unique_ptr<MidiNoteRegion> MidiNoteRegion::fromValueTree (const juce::Value
 
     NoteList notes;
     notes.reserve ((size_t) v.getNumChildren());
+    CcLaneList ccLanes;
     for (int i = 0; i < v.getNumChildren(); ++i)
     {
         auto nv = v.getChild (i);
-        if (! nv.hasType (kNoteTag))
-            continue;
-        MidiNote n;
-        n.id          = (std::uint64_t) (juce::int64) nv.getProperty (kNoteIdAttr, (juce::int64) 0);
-        n.pitch       = (int)    nv.getProperty (kNotePitchAttr, 60);
-        n.velocity    = (int)    nv.getProperty (kNoteVelAttr,   100);
-        n.channel     = (int)    nv.getProperty (kNoteChanAttr,  1);
-        n.onBeat      = (double) nv.getProperty (kNoteOnAttr,    0.0);
-        n.lengthBeats = (double) nv.getProperty (kNoteLenAttr,   0.25);
-        notes.push_back (n);
+        if (nv.hasType (kNoteTag))
+        {
+            MidiNote n;
+            n.id          = (std::uint64_t) (juce::int64) nv.getProperty (kNoteIdAttr, (juce::int64) 0);
+            n.pitch       = (int)    nv.getProperty (kNotePitchAttr, 60);
+            n.velocity    = (int)    nv.getProperty (kNoteVelAttr,   100);
+            n.channel     = (int)    nv.getProperty (kNoteChanAttr,  1);
+            n.onBeat      = (double) nv.getProperty (kNoteOnAttr,    0.0);
+            n.lengthBeats = (double) nv.getProperty (kNoteLenAttr,   0.25);
+            notes.push_back (n);
+        }
+        else if (nv.hasType (juce::Identifier ("cc")))
+        {
+            ccLanes.push_back (MidiCcLane::fromValueTree (nv));
+        }
     }
     /* setNotesAssigningIds: pre-1.0 sessions without note ids get
      * fresh monotonic ids stamped; sessions with ids preserve them
      * AND bump the allocator past the maximum so subsequent
      * piano-roll edits stay unique. */
     r->setNotesAssigningIds (std::move (notes));
+    if (! ccLanes.empty())
+        r->setCcLanes (std::move (ccLanes));
     return r;
 }
 
