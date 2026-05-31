@@ -3811,12 +3811,14 @@ public:
     LaneResize laneResize_;
 
     /** Lane whose clip-strip bottom border is within grab range of
-     *  body-coord (x, y), or -1.  Spans the FULL track width (header +
-     *  timeline) -- like any DAW, you grab the divider line between two
-     *  tracks anywhere along it.  The bottom border sits below the inset
-     *  region bodies, so this doesn't fight region edits. */
-    int laneResizeHandleAt (int /*x*/, int y) const noexcept
+     *  body-coord (x, y), or -1.  Restricted to the track HEADER column
+     *  (x < kLabelW) -- like Ableton/Logic, you resize from the track
+     *  header, NOT over the clip area where the bottom edge would steal
+     *  region / volume-envelope-point clicks.  The visible full-width
+     *  divider line still shows where the boundary is. */
+    int laneResizeHandleAt (int x, int y) const noexcept
     {
+        if (x >= kLabelW) return -1;
         for (int i = 0; i < owner.lanes_.size(); ++i)
         {
             const int bottom = laneClipTopY (i) + laneClipStripH (i);
