@@ -4491,6 +4491,11 @@ private:
         }
 
         /* --- Curve area: edit the ACTIVE binding --- */
+        /* Curve point editing is the Env tool's job (the chip rail above
+         * works in any tool); other tools leave the curve area inert so
+         * automation editing stays consistent across surfaces. */
+        if (activeTool_ != Tool::Env) return;
+
         const int activeIdx = activeBindingIndexForLane (laneIdx);
         if (activeIdx < 0) return;
         const auto& binding = owner.automationBindings_.getReference (activeIdx);
