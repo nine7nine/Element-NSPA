@@ -1376,6 +1376,10 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        /* Automation overlay point drag takes precedence -- it owns the
+         * gesture once a breakpoint mousedown started it. */
+        if (autoEdit_.active) { handleAutomationOverlayDrag (e); return; }
+
         /* Envelope point drag -- updates the point's beat + gain.
          * Sort happens at mouseUp so neighbours don't reshuffle
          * mid-drag (would break the pointer to the in-flight
@@ -1682,6 +1686,8 @@ public:
 
     void mouseUp (const MouseEvent& e) override
     {
+        if (autoEdit_.active) { handleAutomationOverlayUp (e); return; }
+
         /* Finish envelope point drag -- sort the envelope (in case
          * the point passed neighbours) + persist.  Clicks without
          * drag still consumed by the env path, no fallthrough to
@@ -4187,20 +4193,319 @@ private:
         }
     }
 
+    //==========================================================================
+    //  Automation overlay point editing (Layer 3 step 3)
+    //
+    //  Curve point gestures inside an overlay's curve area:
+    //    left-click on a breakpoint  -> drag it (x snapped to grid -> beat,
+    //                                   y -> value, clamped between neighbours)
+    //    left-click on empty curve   -> add a breakpoint there + drag it
+    //    right-click on a breakpoint -> menu (delete / segment curve type)
+    //
+    //  All mutation goes through AutomationRegion's COW setPoints (wait-free
+    //  publish; the audio thread sees the new curve next block).  Live drag
+    //  republishes per move for instant feedback but only PERSISTS
+    //  (saveAutomationToSession) on mouse-up -- one tree rewrite per gesture,
+    //  not per delta.
+    //==========================================================================
+
+    /* In-flight automation point drag.  The point is identified by region
+     * id + index; x-moves clamp between neighbours so the index stays valid
+     * across the COW re-publish for the whole drag. */
+    struct AutoPointEdit
+    {
+        bool       active     = false;
+        int        laneIdx    = -1;
+        int        bindingIdx = -1;
+        juce::Uuid trackId;
+        juce::Uuid regionId;
+        int        pointIndex = -1;
+        bool       moved      = false;
+    };
+    AutoPointEdit autoEdit_;
+
+    /* Pixel radius for grabbing an existing breakpoint. */
+    static constexpr double kAutoHandleGrabPx = 6.0;
+
+    double overlayXToBeat (int x) const noexcept
+    {
+        return juce::jmax (0.0, (double) (x - kLabelW) / (double) kPxPerBeat);
+    }
+
+    double overlayYToValue (int y, const Rectangle<int>& curveArea) const noexcept
+    {
+        const double t = (double) curveArea.getY();
+        const double b = (double) curveArea.getBottom();
+        if (b <= t) return 0.5;
+        return juce::jlimit (0.0, 1.0, (b - (double) y) / (b - t));
+    }
+
+    /** Recompute an overlay row's curve area from its binding index (used
+     *  mid-drag, when only bindingIdx/laneIdx are retained). */
+    Rectangle<int> curveAreaForBinding (int laneIdx, int bindingIdx) const
+    {
+        Rectangle<int> out;
+        forEachOverlayRow (laneIdx, [&] (int bi, int top, int h)
+        {
+            if (bi == bindingIdx) out = overlayCurveArea (top, h);
+        });
+        return out;
+    }
+
+    dsp::automation::AutomationRegion*
+    regionById (dsp::automation::AutomationTrack* track, const juce::Uuid& id) const
+    {
+        if (track == nullptr) return nullptr;
+        const auto* regions = track->loadRegionSnapshot();
+        if (regions == nullptr) return nullptr;
+        for (auto* r : *regions)
+            if (r != nullptr && r->id == id) return r;
+        return nullptr;
+    }
+
+    /** Message-thread-safe "region covering this beat" lookup.  Walks the
+     *  region snapshot read-only; unlike AutomationTrack::findActiveRegion
+     *  it does NOT touch the audio thread's single-writer cache. */
+    dsp::automation::AutomationRegion*
+    regionAtBeat (dsp::automation::AutomationTrack* track, double beat) const
+    {
+        if (track == nullptr) return nullptr;
+        const auto* regions = track->loadRegionSnapshot();
+        if (regions == nullptr) return nullptr;
+        for (auto* r : *regions)
+            if (r != nullptr
+                && beat >= r->positionBeats
+                && beat <  r->positionBeats + r->lengthBeats)
+                return r;
+        return nullptr;
+    }
+
+    /** Index of the breakpoint within grab range of (x, y) in the given
+     *  region, or -1.  Pixel mapping mirrors paintAutomationCurve. */
+    int findPointNear (dsp::automation::AutomationRegion* region,
+                       const Rectangle<int>& curveArea, int x, int y) const
+    {
+        const auto* pts = region->loadSnapshot();
+        if (pts == nullptr) return -1;
+        const double t = (double) curveArea.getY();
+        const double b = (double) curveArea.getBottom();
+        int    best  = -1;
+        double bestD = 1.0e9;
+        for (size_t i = 0; i < pts->size(); ++i)
+        {
+            const double px = (double) kLabelW
+                            + (region->positionBeats + (*pts)[i].tBeats) * (double) kPxPerBeat;
+            const double py = b - juce::jlimit (0.0, 1.0, (*pts)[i].valueNormalized) * (b - t);
+            const double d  = juce::jmax (std::abs (px - x), std::abs (py - y));
+            if (d < bestD) { bestD = d; best = (int) i; }
+        }
+        return (best >= 0 && bestD <= kAutoHandleGrabPx) ? best : -1;
+    }
+
+    /** Persist the engine curve edit + bindings.  Called once per gesture
+     *  (mouse-up / menu action), NOT per drag delta. */
+    void persistAutomationEdit()
+    {
+        if (auto* engine = owner.activeAutomationEngine())
+            if (owner.services_ != nullptr)
+                if (auto sess = owner.services_->context().session())
+                    automation::saveAutomationToSession (*engine, sess->data());
+        owner.flushLanesToSession();
+    }
+
     /** Dispatch a mouseDown that landed in lane `laneIdx`'s automation
-     *  overlay stack (below the clip strip).  Step 2 handles the remove
-     *  [x] only; point add/move/delete + curve-type land in step 3. */
+     *  overlay stack (below the clip strip): remove [x], point grab/add,
+     *  or right-click point menu. */
     void handleAutomationOverlayMouseDown (const MouseEvent& e, int laneIdx)
     {
-        juce::Uuid removeId;
-        forEachOverlayRow (laneIdx, [&] (int bindingIdx, int rowTopY, int rowH)
+        using namespace element::dsp::automation;
+
+        const auto hit = overlayRowAtY (laneIdx, e.y);
+        if (! hit.ok) return;
+        const auto& binding = owner.automationBindings_.getReference (hit.bindingIdx);
+
+        /* Remove [x] (label band). */
+        if (overlayRemoveRect (hit.rowTopY).contains (e.x, e.y))
         {
-            if (e.y < rowTopY || e.y >= rowTopY + rowH) return;
-            if (overlayRemoveRect (rowTopY).contains (e.x, e.y))
-                removeId = owner.automationBindings_.getReference (bindingIdx).id;
+            const auto id = binding.id;
+            owner.removeAutomationBinding (id);
+            return;
+        }
+
+        /* Curve gestures only in the curve area (right of the label band). */
+        if (e.x < kLabelW) return;
+
+        auto* engine = owner.activeAutomationEngine();
+        if (engine == nullptr) return;
+        auto* track = engine->findTrackById (binding.trackId);
+        if (track == nullptr) return;
+
+        const auto curveArea = overlayCurveArea (hit.rowTopY, hit.rowH);
+        const double timelineBeat = overlayXToBeat (e.x);
+        auto* region = regionAtBeat (track, timelineBeat);
+        if (region == nullptr) return;   // click outside any region span
+
+        const int existing = findPointNear (region, curveArea, e.x, e.y);
+
+        /* Right-click on a breakpoint: delete / curve-type menu. */
+        if (e.mods.isPopupMenu())
+        {
+            if (existing >= 0)
+                showOverlayPointMenu (binding.trackId, region->id, existing,
+                                      localAreaToGlobal (Rectangle<int> (e.x, e.y, 1, 1)));
+            return;
+        }
+
+        if (! e.mods.isLeftButtonDown()) return;
+
+        const double value  = overlayYToValue (e.y, curveArea);
+        const double rawBeat = snapBeat (timelineBeat);
+        const double local   = juce::jlimit (0.0, region->lengthBeats,
+                                             rawBeat - region->positionBeats);
+
+        int pointIndex = existing;
+        if (existing < 0)
+        {
+            /* Add a breakpoint (default Linear segment) at the sorted
+             * position, then drag it. */
+            auto pts = region->loadSnapshot() ? *region->loadSnapshot()
+                                              : AutomationRegion::PointList {};
+            AutomationPoint np;
+            np.tBeats          = local;
+            np.valueNormalized = value;
+            size_t insertIdx = 0;
+            while (insertIdx < pts.size() && pts[insertIdx].tBeats < local)
+                ++insertIdx;
+            pts.insert (pts.begin() + (long) insertIdx, np);
+            region->setPoints (pts);
+            pointIndex = (int) insertIdx;
+        }
+
+        autoEdit_            = AutoPointEdit {};
+        autoEdit_.active     = true;
+        autoEdit_.laneIdx    = laneIdx;
+        autoEdit_.bindingIdx = hit.bindingIdx;
+        autoEdit_.trackId    = binding.trackId;
+        autoEdit_.regionId   = region->id;
+        autoEdit_.pointIndex = pointIndex;
+        autoEdit_.moved      = (existing < 0);   // an add always persists on up
+        repaint();
+    }
+
+    void handleAutomationOverlayDrag (const MouseEvent& e)
+    {
+        using namespace element::dsp::automation;
+        if (autoEdit_.pointIndex < 0) return;
+
+        auto* engine = owner.activeAutomationEngine();
+        if (engine == nullptr) return;
+        auto* track = engine->findTrackById (autoEdit_.trackId);
+        auto* region = regionById (track, autoEdit_.regionId);
+        if (region == nullptr) return;
+
+        const auto curveArea = curveAreaForBinding (autoEdit_.laneIdx, autoEdit_.bindingIdx);
+        if (curveArea.isEmpty()) return;
+
+        auto pts = region->loadSnapshot() ? *region->loadSnapshot()
+                                          : AutomationRegion::PointList {};
+        const int i = autoEdit_.pointIndex;
+        if (i < 0 || i >= (int) pts.size()) return;
+
+        const double rawBeat = snapBeat (overlayXToBeat (e.x));
+        double local = juce::jlimit (0.0, region->lengthBeats,
+                                     rawBeat - region->positionBeats);
+
+        /* Clamp between neighbours so the point can't reorder mid-drag
+         * (keeps pointIndex stable). */
+        constexpr double eps = 1.0e-4;
+        if (i > 0)                       local = juce::jmax (local, pts[(size_t) i - 1].tBeats + eps);
+        if (i < (int) pts.size() - 1)    local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
+
+        pts[(size_t) i].tBeats          = local;
+        pts[(size_t) i].valueNormalized = overlayYToValue (e.y, curveArea);
+        region->setPoints (pts);
+        autoEdit_.moved = true;
+        repaint();
+    }
+
+    void handleAutomationOverlayUp (const MouseEvent&)
+    {
+        if (autoEdit_.moved)
+            persistAutomationEdit();
+        autoEdit_ = AutoPointEdit {};
+        repaint();
+    }
+
+    /** Async context menu for a breakpoint: delete + per-segment curve
+     *  algorithm.  Re-resolves track/region by id in the callback since
+     *  the menu outlives the click. */
+    void showOverlayPointMenu (juce::Uuid trackId, juce::Uuid regionId,
+                               int pointIndex, Rectangle<int> screenAnchor)
+    {
+        using namespace element::dsp::automation;
+
+        juce::PopupMenu curveMenu;
+        curveMenu.addItem (100, "Linear");
+        curveMenu.addItem (101, "Exponential");
+        curveMenu.addItem (102, "Super-ellipse");
+        curveMenu.addItem (103, "Vital");
+        curveMenu.addItem (104, "Logarithmic");
+        curveMenu.addItem (105, "Pulse / step");
+
+        juce::PopupMenu menu;
+        menu.addItem (1, "Delete point");
+        menu.addSubMenu ("Segment curve", curveMenu);
+
+        menu.showMenuAsync (
+            juce::PopupMenu::Options().withTargetScreenArea (screenAnchor),
+            [this, trackId, regionId, pointIndex] (int result)
+            {
+                if (result <= 0) return;
+                auto* engine = owner.activeAutomationEngine();
+                if (engine == nullptr) return;
+                auto* track  = engine->findTrackById (trackId);
+                auto* region = regionById (track, regionId);
+                if (region == nullptr) return;
+
+                auto pts = region->loadSnapshot() ? *region->loadSnapshot()
+                                                  : AutomationRegion::PointList {};
+                if (pointIndex < 0 || pointIndex >= (int) pts.size()) return;
+
+                if (result == 1)
+                {
+                    pts.erase (pts.begin() + (long) pointIndex);
+                }
+                else
+                {
+                    CurveAlgorithm algo = CurveAlgorithm::Linear;
+                    switch (result)
+                    {
+                        case 101: algo = CurveAlgorithm::Exponent;     break;
+                        case 102: algo = CurveAlgorithm::SuperEllipse; break;
+                        case 103: algo = CurveAlgorithm::Vital;        break;
+                        case 104: algo = CurveAlgorithm::Logarithmic;  break;
+                        case 105: algo = CurveAlgorithm::Pulse;        break;
+                        default:  algo = CurveAlgorithm::Linear;       break;
+                    }
+                    pts[(size_t) pointIndex].curve.algorithm = algo;
+                }
+
+                region->setPoints (pts);
+                persistAutomationEdit();
+                repaint();
+            });
+    }
+
+    /** Locate the overlay row at body-coord y for lane `laneIdx`. */
+    struct OverlayRowHit { bool ok = false; int bindingIdx = -1; int rowTopY = 0; int rowH = 0; };
+    OverlayRowHit overlayRowAtY (int laneIdx, int y) const
+    {
+        OverlayRowHit hit;
+        forEachOverlayRow (laneIdx, [&] (int bi, int top, int h)
+        {
+            if (y >= top && y < top + h) hit = OverlayRowHit { true, bi, top, h };
         });
-        if (! removeId.isNull())
-            owner.removeAutomationBinding (removeId);
+        return hit;
     }
 
     /** Paint a volume envelope curve over the audio region body
