@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <set>
 #include <thread>
 
 using element::MidiNote;
@@ -491,6 +492,56 @@ BOOST_AUTO_TEST_CASE (region_xml_default_channel_omitted)
     const auto nv2 = vt2.getChild (0);
     BOOST_CHECK (nv2.hasProperty (juce::Identifier ("ch")));
     BOOST_CHECK_EQUAL ((int) nv2.getProperty (juce::Identifier ("ch")), 7);
+}
+
+/* ---------- setNotesAssigningIds: unique-id invariant ---------- */
+
+/* Selection/highlight/per-note edit all key on the note id, so every
+ * note MUST end up with a unique non-zero id.  The old single-pass logic
+ * could hand a 0-id note a fresh id that collided with a preset id later
+ * in the (position-sorted) list -- making distinct notes alias under
+ * selection ("grab one note, others light up elsewhere"). */
+BOOST_AUTO_TEST_CASE (assign_ids_no_collision_when_zero_precedes_preset)
+{
+    MidiNoteRegion r;
+    /* Position order puts the 0-id note first; a preset id of 1 would be
+     * exactly what nextNoteId() hands out on a fresh region (allocator 0). */
+    MidiNoteRegion::NoteList notes;
+    MidiNote a = makeNote (60, 0.0); a.id = 0;   // gets a fresh id
+    MidiNote b = makeNote (62, 1.0); b.id = 1;   // preset, appears later
+    notes.push_back (a);
+    notes.push_back (b);
+    r.setNotesAssigningIds (std::move (notes));
+
+    const auto* snap = r.loadSnapshot();
+    BOOST_REQUIRE (snap != nullptr);
+    BOOST_REQUIRE_EQUAL (snap->size(), (size_t) 2);
+    BOOST_CHECK ((*snap)[0].id != 0);
+    BOOST_CHECK ((*snap)[1].id != 0);
+    BOOST_CHECK ((*snap)[0].id != (*snap)[1].id);   // no collision
+}
+
+BOOST_AUTO_TEST_CASE (assign_ids_repairs_duplicate_preset_ids)
+{
+    /* A session corrupted by the old bug (two notes persisted with the
+     * same id) must be repaired on load, not preserved. */
+    MidiNoteRegion r;
+    MidiNoteRegion::NoteList notes;
+    MidiNote a = makeNote (60, 0.0); a.id = 5;
+    MidiNote b = makeNote (62, 1.0); b.id = 5;   // duplicate
+    MidiNote c = makeNote (64, 2.0); c.id = 5;   // triplicate
+    notes.push_back (a); notes.push_back (b); notes.push_back (c);
+    r.setNotesAssigningIds (std::move (notes));
+
+    const auto* snap = r.loadSnapshot();
+    BOOST_REQUIRE_EQUAL (snap->size(), (size_t) 3);
+    std::set<std::uint64_t> ids;
+    for (const auto& n : *snap)
+    {
+        BOOST_CHECK (n.id != 0);
+        ids.insert (n.id);
+    }
+    BOOST_CHECK_EQUAL (ids.size(), (size_t) 3);   // all distinct after repair
 }
 
 BOOST_AUTO_TEST_SUITE_END()  /* MidiNoteRegionTests */

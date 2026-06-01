@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 namespace element {
 
@@ -100,16 +101,28 @@ void MidiNoteRegion::setNotes (NoteList newNotes)
 
 void MidiNoteRegion::setNotesAssigningIds (NoteList newNotes)
 {
-    /* Stamp fresh ids for any note with id == 0.  Preserve existing
-     * ids so callers that pre-assigned (e.g. undo replay) get
-     * round-trip stability.  Bumps noteIdAllocator_ past every
-     * pre-assigned id to keep the monotonic invariant. */
+    /* Guarantee every note ends up with a UNIQUE non-zero id.  Selection,
+     * highlight, and per-note edit/undo all key on the id, so a duplicate
+     * makes distinct notes alias -- selecting one lights up another
+     * somewhere else (the "no rhyme or reason" selection bug).
+     *
+     * Two passes are required.  The list is sorted by POSITION, not id, so
+     * a single pass that stamps a fresh id for a 0-id note before it has
+     * seen a later preset id can hand out an id that collides with that
+     * preset id.  Pass 1 advances the allocator past every pre-assigned id
+     * first; pass 2 then stamps a fresh id for any note that is unassigned
+     * (id == 0) OR a duplicate of an id already seen (repairs a session
+     * whose ids were corrupted by the old single-pass logic). */
+    for (const auto& n : newNotes)
+        if (n.id != 0 && n.id > noteIdAllocator_)
+            noteIdAllocator_ = n.id;
+
+    std::unordered_set<std::uint64_t> seen;
+    seen.reserve (newNotes.size());
     for (auto& n : newNotes)
     {
-        if (n.id == 0)
-            n.id = nextNoteId();
-        else if (n.id > noteIdAllocator_)
-            noteIdAllocator_ = n.id;
+        if (n.id == 0 || ! seen.insert (n.id).second)
+            n.id = nextNoteId();   // fresh id > every preset id (pass 1) => unique
     }
     setNotes (std::move (newNotes));
 }
