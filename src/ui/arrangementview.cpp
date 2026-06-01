@@ -1549,15 +1549,14 @@ public:
             if (pt == nullptr) return;
 
             const auto body = regionBodyRect (envGesture_.laneIdx, *r);
-            /* Apply the grab offset so the dot tracks the cursor from where
-             * it was grabbed instead of snapping its centre under the
-             * pointer (no jump on the first drag frame). */
-            const float tx = (float) e.x + envGesture_.grabDx;
-            const float ty = (float) e.y + envGesture_.grabDy;
+            /* Snap the point to the cursor (no grab offset).  A grab offset
+             * made an edge-positioned first point sit diagonally off the
+             * cursor when grabbed from just outside its dot -- snapping is
+             * the original, predictable behaviour. */
             pt->beatOffset = juce::jlimit (0.0, r->lengthBeats,
-                                            envXToBeatOffset ((int) std::lround (tx), body, *r));
+                                            envXToBeatOffset (e.x, body, *r));
             pt->gainDb     = juce::jlimit (-60.0f, 12.0f,
-                                            envYToGainDb ((int) std::lround (ty), body));
+                                            envYToGainDb (e.y, body));
             repaintLane (envGesture_.laneIdx);
             return;
         }
@@ -4842,11 +4841,10 @@ private:
             const int i = autoEdit_.pointIndex;
             if (i < 0 || i >= (int) pts.size()) return;
 
-            /* Apply the grab offset so the point tracks from where it was
-             * grabbed (no snap-to-cursor jump on the first frame). */
-            const int ax = (int) std::lround ((float) e.x + autoEdit_.grabDx);
-            const int ay = (int) std::lround ((float) e.y + autoEdit_.grabDy);
-            const double rawBeat = snapBeat (overlayXToBeat (ax));
+            /* Snap to cursor (no grab offset) -- matches the volume-envelope
+             * point move; a grab offset made edge points sit diagonally off
+             * the cursor. */
+            const double rawBeat = snapBeat (overlayXToBeat (e.x));
             double local = juce::jlimit (0.0, region->lengthBeats,
                                          rawBeat - region->positionBeats);
             constexpr double eps = 1.0e-4;
@@ -4854,7 +4852,7 @@ private:
             if (i < (int) pts.size() - 1) local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
 
             pts[(size_t) i].tBeats          = local;
-            pts[(size_t) i].valueNormalized = overlayYToValue (ay, curveArea);
+            pts[(size_t) i].valueNormalized = overlayYToValue (e.y, curveArea);
         }
         else // ShapeCurve -- 2D bend handle, identical feel to the volume env
         {
