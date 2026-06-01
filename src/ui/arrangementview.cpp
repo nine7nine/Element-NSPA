@@ -67,6 +67,27 @@ inline juce::Colour laneTintForIndex (int idx) noexcept
     return element::ui::laneTint (idx);
 }
 
+/** Distinct, readable-on-dark colour per automation binding, so
+ *  superimposed overlay curves + their chip-rail tabs are easy to tell
+ *  apart.  Cycles a fixed palette by binding index. */
+inline juce::Colour automationBindingColour (int idx) noexcept
+{
+    static const juce::uint32 kPalette[] = {
+        0xff'4a'c8'a0,  // teal
+        0xff'e8'a1'3a,  // orange
+        0xff'6a'a8'e8,  // blue
+        0xff'd0'6a'e0,  // magenta
+        0xff'9a'd8'4a,  // lime
+        0xff'e8'5a'6a,  // red
+        0xff'e0'c8'4a,  // yellow
+        0xff'8a'6a'e0,  // violet
+        0xff'4a'c8'e0,  // cyan
+        0xff'e0'7a'3a,  // amber
+    };
+    constexpr int n = (int) (sizeof (kPalette) / sizeof (kPalette[0]));
+    return juce::Colour (kPalette[((idx % n) + n) % n]);
+}
+
 bool isAcceptableAudioFile (const juce::String& path) noexcept
 {
     for (const char* ext : kAudioDropExtensions)
@@ -1158,12 +1179,16 @@ public:
     {
         if (r.volumeEnvelope.empty()) return -1;
         const auto body = regionBodyRect (laneIdx, r);
+        /* Square (max-metric) grab zone -- matches the rectangular
+         * eligibility gate + the overlay's findPointNear, so a corner
+         * approach to an edge anchor can't fall in the gap between a
+         * circular hit-test and a rectangular gate (the "sometimes I
+         * can't grab the first point" inconsistency). */
         for (size_t i = 0; i < r.volumeEnvelope.size(); ++i)
         {
             const auto p = envPointPx (r, i, body);
-            const float dx = (float) x - p.x;
-            const float dy = (float) y - p.y;
-            if (dx * dx + dy * dy <= kEnvPointGrabPx * kEnvPointGrabPx)
+            if (juce::jmax (std::abs ((float) x - p.x),
+                            std::abs ((float) y - p.y)) <= kEnvPointGrabPx)
                 return (int) i;
         }
         return -1;
@@ -3912,13 +3937,18 @@ public:
      *  grab the visible divider line anywhere along it.  The mouseDown
      *  caller gates this OFF in the Env tool, where the bottom edge is for
      *  envelope-point editing instead -- so resize never steals curve
-     *  clicks. */
+     *  clicks.
+     *
+     *  The grab band sits on the CLIP-STRIP side of the divider (above it,
+     *  with only 1 px of slop below) so it never bleeds into the automation
+     *  chip rail that begins exactly at this border -- otherwise hovering
+     *  the tabs showed the resize cursor "below where it should be". */
     int laneResizeHandleAt (int /*x*/, int y) const noexcept
     {
         for (int i = 0; i < owner.lanes_.size(); ++i)
         {
             const int bottom = laneClipTopY (i) + laneClipStripH (i);
-            if (std::abs (y - bottom) <= kLaneResizeGrabPx) return i;
+            if (y <= bottom + 1 && y >= bottom - 2 * kLaneResizeGrabPx) return i;
         }
         return -1;
     }
@@ -5924,12 +5954,22 @@ private:
         {
             const auto& b = owner.automationBindings_.getReference (c.bindingIdx);
             const bool active = (c.bindingIdx == activeIdx);
-            g.setColour (b.colour.withMultipliedBrightness (active ? 1.0f : 0.6f)
-                                 .withAlpha (active ? 0.95f : 0.5f));
+
+            /* Active = solid binding colour with a high-contrast (auto
+             * black/white) label so it's always readable; inactive = a
+             * dim wash of the same colour with the label in that colour
+             * so each tab still reads as its curve's hue. */
+            const juce::Colour fill = active
+                ? b.colour
+                : b.colour.withMultipliedBrightness (0.32f).withAlpha (0.85f);
+            g.setColour (fill);
             g.fillRect (c.rect);
-            g.setColour (active ? juce::Colours::white : juce::Colours::black.withAlpha (0.5f));
+            g.setColour (active ? juce::Colours::white.withAlpha (0.9f)
+                                : b.colour.withAlpha (0.55f));
             g.drawRect (c.rect, active ? 2 : 1);
-            g.setColour (active ? juce::Colours::white : juce::Colours::white.withAlpha (0.8f));
+
+            g.setColour (active ? b.colour.contrasting (0.92f)
+                                : b.colour.brighter (0.3f).withAlpha (0.95f));
             g.drawText (chipLabel (b.name), c.rect.reduced (4, 0),
                         juce::Justification::centredLeft, true);
         }
@@ -7642,6 +7682,7 @@ juce::Uuid ArrangementView::addAutomationLane (const dsp::automation::Automation
     b.trackId     = live->id;
     b.ownerLaneId = ownerLaneId;
     b.name        = automationTargetDisplayName (key);
+    b.colour      = automationBindingColour (automationBindings_.size());
     automationBindings_.add (b);
 
     /* Persist: bindings ride tags::arrangement (writeLanesToSession's
