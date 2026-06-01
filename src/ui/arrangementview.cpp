@@ -156,6 +156,30 @@ public:
      *                move under Select (Ardour/Cubase-style). */
     enum class Tool { Select, Range, Split, Trim, Audition, Env };
 
+    /** The cursor that represents a tool -- the single source of truth so
+     *  setActiveTool + every hover path agree.  Shown over clips too, so
+     *  the cursor always says what a click in this tool will do. */
+    juce::MouseCursor toolCursor() const noexcept
+    {
+        switch (activeTool_)
+        {
+            /* Use the compositor's NATIVE arrow for the precise editors.
+             * Custom-shaped cursors (crosshair / hand) get a wrong hotspot
+             * in the wayland/winelib backend -- the rendered glyph sits
+             * offset from where the click actually registers, which makes
+             * grabbing envelope dots feel "off".  The native arrow's tip
+             * hotspot is exact, so the cursor tells the truth.  (Backend
+             * hotspot fix is the real root cure -- tracked separately.) */
+            case Tool::Select:   return juce::MouseCursor::NormalCursor;
+            case Tool::Range:    return juce::MouseCursor::NormalCursor;
+            case Tool::Split:    return juce::MouseCursor::IBeamCursor;
+            case Tool::Trim:     return juce::MouseCursor::LeftRightResizeCursor;
+            case Tool::Audition: return juce::MouseCursor::PointingHandCursor;
+            case Tool::Env:      return juce::MouseCursor::NormalCursor;
+        }
+        return juce::MouseCursor::NormalCursor;
+    }
+
     void setActiveTool (Tool t)
     {
         if (activeTool_ == t) return;
@@ -163,15 +187,7 @@ public:
         /* Cancel any in-flight gesture if it doesn't suit the new
          * tool; harmless to wipe even when it does. */
         gesture_ = Gesture {};
-        switch (t)
-        {
-            case Tool::Select:   setMouseCursor (juce::MouseCursor::NormalCursor);          break;
-            case Tool::Range:    setMouseCursor (juce::MouseCursor::CrosshairCursor);        break;
-            case Tool::Split:    setMouseCursor (juce::MouseCursor::IBeamCursor);             break;
-            case Tool::Trim:     setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);   break;
-            case Tool::Audition: setMouseCursor (juce::MouseCursor::PointingHandCursor);      break;
-            case Tool::Env:      setMouseCursor (juce::MouseCursor::CrosshairCursor);          break;
-        }
+        setMouseCursor (toolCursor());
         repaint();
     }
     Tool getActiveTool() const noexcept { return activeTool_; }
@@ -697,7 +713,23 @@ public:
         const auto& regions = lane.playlist.regions();
         for (const auto& r : regions)
         {
-            if (! r.containsBeat (beat)) continue;
+            /* Env tool grabs envelope points by PIXEL proximity, so a
+             * region qualifies when the click is within the grab band of
+             * its body -- not only strictly inside its beat span.  Without
+             * this the START/END anchors (painted right on the body edge)
+             * have a clipped, asymmetric grab zone: their outer ~5px falls
+             * just outside containsBeat (or into the label gutter for a
+             * region at beat 0), so a centred click misses.  Interior
+             * points are unaffected -- that's why it "works on all others". */
+            const bool envEligible = activeTool_ == Tool::Env
+                                     && runtime.isAudioLane()
+                                     && r.sequenceIdx < 0;
+            const bool envHit = envEligible
+                && regionBodyRect (laneIdx, r)
+                       .expanded ((int) kEnvPointGrabPx, (int) kEnvPointGrabPx)
+                       .contains (e.x, e.y);
+
+            if (! r.containsBeat (beat) && ! envHit) continue;
 
             /* Env tool: volume-envelope editing on audio clips.  Owns the
              * whole gesture -- grab a breakpoint, bend a segment midpoint,
@@ -721,17 +753,26 @@ public:
                         showEnvPointContextMenu (laneIdx, r.id, pointId);
                     else
                     {
+                        const auto p = envPointPx (r, (size_t) ptIdx,
+                                                   regionBodyRect (laneIdx, r));
                         envGesture_.laneIdx    = laneIdx;
                         envGesture_.regionId   = r.id;
                         envGesture_.pointId    = pointId;
                         envGesture_.dragActive = false;
+                        envGesture_.grabDx     = p.x - (float) e.x;
+                        envGesture_.grabDy     = p.y - (float) e.y;
                     }
                     repaintLane (laneIdx);
                     return;
                 }
 
-                /* Segment-midpoint bend (right-click = reset to straight). */
-                const int segIdx = envSegmentMidHitAt (laneIdx, r, e.x, e.y);
+                /* Slope grab: clicking anywhere along the curve line (not
+                 * just the tiny midpoint handle) grabs that segment and
+                 * drags to shape it.  Right-click = reset to straight.
+                 * To ADD a point, double-click (mouseDoubleClick) -- a
+                 * single click never spawns a point, so a near-miss can't
+                 * litter the curve with junk breakpoints. */
+                const int segIdx = envSegmentLineHitAt (laneIdx, r, e.x, e.y);
                 if (segIdx >= 0)
                 {
                     if (e.mods.isPopupMenu())
@@ -757,23 +798,9 @@ public:
                     return;
                 }
 
-                /* Empty curve area -> add a breakpoint at the click + grab
-                 * it for an immediate drag (Cubase draw behaviour). */
-                if (! e.mods.isPopupMenu())
-                {
-                    const double beatOff = juce::jlimit (0.0, r.lengthBeats,
-                                                         beat - r.positionBeats);
-                    const float  gainDb  = envYToGainDb (e.y, regionBodyRect (laneIdx, r));
-                    const auto newId = insertEnvelopePoint (laneIdx, r.id, beatOff, gainDb);
-                    if (! newId.isNull())
-                    {
-                        envGesture_.laneIdx    = laneIdx;
-                        envGesture_.regionId   = r.id;
-                        envGesture_.pointId    = newId;
-                        envGesture_.dragActive = false;
-                    }
-                }
-                return;   // Env tool consumes the click; clip stays put
+                /* Missed every point + the curve line: consume the click
+                 * (Env tool never moves the clip) but add nothing. */
+                return;
             }
 
             lastInteractedLane_ = laneIdx;
@@ -1102,29 +1129,70 @@ public:
         return t * r.lengthBeats;
     }
 
-    /** Hit-test for envelope breakpoint dots.  5 px radius -- matches
-     *  the visual dot size when selected, with a small slop for
-     *  finger / trackpad use.  Returns the matching point's index in
-     *  the region's envelope, or -1 if none. */
+    /** Pixel position of envelope point `i` inside `body`.  The single
+     *  source of truth for both hit-testing and (matching) paint maths --
+     *  kTopDb/kBotDb/yPad mirror paintVolumeEnvelope's gainToY/beatToX. */
+    juce::Point<float> envPointPx (const Region& r, size_t i,
+                                   const Rectangle<int>& body) const noexcept
+    {
+        constexpr float kTopDb = 6.0f, kBotDb = -24.0f;
+        const int yPad = 3;
+        const int H = juce::jmax (1, body.getHeight() - yPad * 2);
+        const auto& pt = r.volumeEnvelope[i];
+        const float px = body.getX()
+            + (float) (pt.beatOffset / juce::jmax (1e-9, r.lengthBeats))
+              * (float) body.getWidth();
+        const float t  = juce::jlimit (0.0f, 1.0f,
+            (kTopDb - pt.gainDb) / (kTopDb - kBotDb));
+        const float py = body.getY() + yPad + t * (float) H;
+        return { px, py };
+    }
+
+    /** Hit-test for envelope breakpoint dots.  8 px radius -- the painted
+     *  dot is only ~3 px, so a generous grab band is what makes points
+     *  reliably grabbable (a tight radius turned every near-miss into a
+     *  spurious "add point" under the old gesture model).  Returns the
+     *  matching point's index, or -1. */
+    static constexpr float kEnvPointGrabPx = 8.0f;
     int envPointHitAt (int laneIdx, const Region& r, int x, int y) const noexcept
     {
         if (r.volumeEnvelope.empty()) return -1;
         const auto body = regionBodyRect (laneIdx, r);
-        constexpr float kTopDb = 6.0f, kBotDb = -24.0f;
-        const int yPad = 3;
-        const int H = juce::jmax (1, body.getHeight() - yPad * 2);
         for (size_t i = 0; i < r.volumeEnvelope.size(); ++i)
         {
-            const auto& pt = r.volumeEnvelope[i];
-            const float px = body.getX()
-                + (float) (pt.beatOffset / juce::jmax (1e-9, r.lengthBeats))
-                  * (float) body.getWidth();
-            const float t  = juce::jlimit (0.0f, 1.0f,
-                (kTopDb - pt.gainDb) / (kTopDb - kBotDb));
-            const float py = body.getY() + yPad + t * (float) H;
-            const float dx = (float) x - px;
-            const float dy = (float) y - py;
-            if (dx * dx + dy * dy <= 25.0f) return (int) i;
+            const auto p = envPointPx (r, i, body);
+            const float dx = (float) x - p.x;
+            const float dy = (float) y - p.y;
+            if (dx * dx + dy * dy <= kEnvPointGrabPx * kEnvPointGrabPx)
+                return (int) i;
+        }
+        return -1;
+    }
+
+    /** Hit-test for the curve LINE itself: the index of the left
+     *  breakpoint of the segment whose drawn chord passes within
+     *  ~6 px of (x, y), or -1.  Lets the user grab a slope anywhere
+     *  along it (not just the tiny midpoint handle) to shape it.
+     *  Approximates curved segments by their chord -- close enough
+     *  for a hit band, and the common case is straight segments. */
+    static constexpr float kEnvLineGrabPx = 6.0f;
+    int envSegmentLineHitAt (int laneIdx, const Region& r, int x, int y) const noexcept
+    {
+        if (r.volumeEnvelope.size() < 2) return -1;
+        const auto body = regionBodyRect (laneIdx, r);
+        const float fx = (float) x, fy = (float) y;
+        for (size_t i = 0; i + 1 < r.volumeEnvelope.size(); ++i)
+        {
+            const auto a = envPointPx (r, i,     body);
+            const auto b = envPointPx (r, i + 1, body);
+            const float vx = b.x - a.x, vy = b.y - a.y;
+            const float len2 = vx * vx + vy * vy;
+            float t = len2 > 1e-6f ? ((fx - a.x) * vx + (fy - a.y) * vy) / len2 : 0.0f;
+            t = juce::jlimit (0.0f, 1.0f, t);
+            const float projx = a.x + t * vx, projy = a.y + t * vy;
+            const float dx = fx - projx, dy = fy - projy;
+            if (dx * dx + dy * dy <= kEnvLineGrabPx * kEnvLineGrabPx)
+                return (int) i;
         }
         return -1;
     }
@@ -1431,10 +1499,15 @@ public:
             if (pt == nullptr) return;
 
             const auto body = regionBodyRect (envGesture_.laneIdx, *r);
+            /* Apply the grab offset so the dot tracks the cursor from where
+             * it was grabbed instead of snapping its centre under the
+             * pointer (no jump on the first drag frame). */
+            const float tx = (float) e.x + envGesture_.grabDx;
+            const float ty = (float) e.y + envGesture_.grabDy;
             pt->beatOffset = juce::jlimit (0.0, r->lengthBeats,
-                                            envXToBeatOffset (e.x, body, *r));
+                                            envXToBeatOffset ((int) std::lround (tx), body, *r));
             pt->gainDb     = juce::jlimit (-60.0f, 12.0f,
-                                            envYToGainDb (e.y, body));
+                                            envYToGainDb ((int) std::lround (ty), body));
             repaintLane (envGesture_.laneIdx);
             return;
         }
@@ -2018,13 +2091,22 @@ public:
             setMouseCursor (juce::MouseCursor::NormalCursor);
             return;
         }
+        /* Over the clip strip: show the ACTIVE TOOL's own cursor, never a
+         * move-hand.  Each tool's cursor (arrow / crosshair / I-beam /
+         * resize / pointing-hand) tells the user what a click will do --
+         * the dragging-hand told them "move", which both Select and Env do
+         * not primarily do, so it was misleading + unwanted. */
         const auto& lane = owner.lanes_.getReference (laneIdx);
         const int laneTopY = laneClipTopY (laneIdx);
         for (const auto& r : lane.playlist.regions())
         {
             const int regionStartX = kLabelW + (int) (r.positionBeats * kPxPerBeat);
             const int regionEndX   = kLabelW + (int) (r.endBeats()    * kPxPerBeat);
-            if (e.x >= regionEndX - kEdgeHandlePx && e.x <= regionEndX
+            /* Right-edge resize affordance only for the tools that resize a
+             * clip from its edge (Select drag-resize, Trim).  Other tools
+             * keep their own cursor right up to the edge. */
+            if ((activeTool_ == Tool::Select || activeTool_ == Tool::Trim)
+                && e.x >= regionEndX - kEdgeHandlePx && e.x <= regionEndX
                 && e.y >= laneTopY && e.y < laneTopY + laneClipStripH (laneIdx))
             {
                 setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
@@ -2033,11 +2115,11 @@ public:
             if (e.x >= regionStartX && e.x < regionEndX
                 && e.y >= laneTopY && e.y < laneTopY + laneClipStripH (laneIdx))
             {
-                setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+                setMouseCursor (toolCursor());
                 return;
             }
         }
-        setMouseCursor (juce::MouseCursor::NormalCursor);
+        setMouseCursor (toolCursor());
     }
 
     /* Wheel-zoom removed per UX feedback 2026-05-24 -- the mouse wheel
@@ -4336,11 +4418,16 @@ private:
         int          pointIndex   = -1;   // MovePoint
         int          segmentIndex = -1;   // ShapeCurve (from-point index)
         bool         moved        = false;
+        /* Pixel grab offset (point centre - click), applied each drag
+         * frame so the point tracks from where it was, not snapping under
+         * the cursor.  Matches the clip-envelope EnvGesture semantics. */
+        float        grabDx       = 0.0f;
+        float        grabDy       = 0.0f;
     };
     AutoPointEdit autoEdit_;
 
     /* Pixel radius for grabbing an existing breakpoint. */
-    static constexpr double kAutoHandleGrabPx = 6.0;
+    static constexpr double kAutoHandleGrabPx = 8.0;   // match clip-envelope grab band
 
     double overlayXToBeat (int x) const noexcept
     {
@@ -4539,6 +4626,19 @@ private:
         if (existing >= 0)
         {
             beginEdit (AutoEditMode::MovePoint, existing, -1);
+            if (const auto* pts = region->loadSnapshot())
+                if (existing < (int) pts->size())
+                {
+                    const double tt = (double) curveArea.getY();
+                    const double bb = (double) curveArea.getBottom();
+                    const float px = (float) (kLabelW
+                        + (region->positionBeats + (*pts)[(size_t) existing].tBeats)
+                          * (double) kPxPerBeat);
+                    const float py = (float) (bb - juce::jlimit (0.0, 1.0,
+                        (*pts)[(size_t) existing].valueNormalized) * (bb - tt));
+                    autoEdit_.grabDx = px - (float) e.x;
+                    autoEdit_.grabDy = py - (float) e.y;
+                }
             repaint();
             return;
         }
@@ -4590,7 +4690,11 @@ private:
             const int i = autoEdit_.pointIndex;
             if (i < 0 || i >= (int) pts.size()) return;
 
-            const double rawBeat = snapBeat (overlayXToBeat (e.x));
+            /* Apply the grab offset so the point tracks from where it was
+             * grabbed (no snap-to-cursor jump on the first frame). */
+            const int ax = (int) std::lround ((float) e.x + autoEdit_.grabDx);
+            const int ay = (int) std::lround ((float) e.y + autoEdit_.grabDy);
+            const double rawBeat = snapBeat (overlayXToBeat (ax));
             double local = juce::jlimit (0.0, region->lengthBeats,
                                          rawBeat - region->positionBeats);
             constexpr double eps = 1.0e-4;
@@ -4598,7 +4702,7 @@ private:
             if (i < (int) pts.size() - 1) local = juce::jmin (local, pts[(size_t) i + 1].tBeats - eps);
 
             pts[(size_t) i].tBeats          = local;
-            pts[(size_t) i].valueNormalized = overlayYToValue (e.y, curveArea);
+            pts[(size_t) i].valueNormalized = overlayYToValue (ay, curveArea);
         }
         else // ShapeCurve
         {
@@ -6018,6 +6122,12 @@ private:
         juce::Uuid regionId;
         juce::Uuid pointId;
         bool       dragActive = false;
+        /* Pixel offset from the click point to the dot's painted centre,
+         * captured at grab time.  Applied every drag frame so the point
+         * tracks the cursor from where it WAS rather than snapping its
+         * centre under the cursor (Ardour/Zrythm grab-offset semantics). */
+        float      grabDx     = 0.0f;
+        float      grabDy     = 0.0f;
     };
     EnvGesture envGesture_;
 
