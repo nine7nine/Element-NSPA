@@ -6471,6 +6471,13 @@ ArrangementView::ArrangementView()
     viewport_.setViewedComponent (body_.get(), false);
     viewport_.setScrollBarsShown (true, true);
 
+    /* Playhead repaint runs on the peer's vblank tick (vsync-cadenced),
+     * not the 30Hz transport timer -- see playheadVBlank_ in the header.
+     * Attached to the Body so it only fires while the arranger is on
+     * screen; the transport timer keeps dispatching when it isn't. */
+    playheadVBlank_ = juce::VBlankAttachment (body_.get(),
+                                              [this] { updatePlayheadPaint(); });
+
     rescanBtn_.onClick    = [this]() { rescanLaneTargets(); };
     addAudioBtn_.onClick  = [this]() { createEmptyAudioLane (true /*stereo*/); };
     addMidiBtn_.onClick   = [this]() { createEmptyMidiLane(); };
@@ -8981,19 +8988,35 @@ void ArrangementView::timerCallback()
 
     if (playing) dispatchAtBeat (beat);
 
-    if (body_ != nullptr && (playing || wasPlaying_ != playing))
-    {
-        const int oldPxX = (lastBeat_ > -0.001)
-                              ? Body::kLabelW + (int) (lastBeat_ * body_->kPxPerBeat)
-                              : -1;
-        const int newPxX = Body::kLabelW + (int) (beat * body_->kPxPerBeat);
-        if (oldPxX != newPxX || wasPlaying_ != playing)
-            body_->repaintPlayhead (oldPxX, newPxX);
-    }
-
-    lastBeat_   = beat;
+    /* Playhead repaint is NOT done here -- it runs on the vblank tick
+     * (updatePlayheadPaint) so it's vsync-cadenced rather than beating
+     * against the peer's vblank at this 30Hz timer's phase.  lastBeat_
+     * (the painted position) is owned by the vblank too. */
     wasPlaying_ = playing;
     updateTransportLabel();
+}
+
+void ArrangementView::updatePlayheadPaint()
+{
+    /* Runs on the Body's vblank tick (vsync-cadenced).  Mirrors the old
+     * timer playhead block, with its OWN play-edge state so it stays
+     * independent of the transport timer's wasPlaying_.  Surgical: repaint
+     * only the old + new playhead strips.  When stopped the playhead PARKS
+     * at the last beat (one settling repaint on the stop edge, then idle). */
+    if (monitor_ == nullptr || body_ == nullptr) return;
+    const bool playing = monitor_->playing.get();
+    if (! playing && playing == playheadPaintPlaying_) return;   // parked / idle
+
+    const double beat = computePlayheadBeats();
+    const int oldPxX = (lastBeat_ > -0.001)
+                          ? Body::kLabelW + (int) (lastBeat_ * body_->kPxPerBeat)
+                          : -1;
+    const int newPxX = Body::kLabelW + (int) (beat * body_->kPxPerBeat);
+    if (oldPxX != newPxX || playing != playheadPaintPlaying_)
+        body_->repaintPlayhead (oldPxX, newPxX);
+
+    lastBeat_ = beat;
+    playheadPaintPlaying_ = playing;
 }
 
 } // namespace element

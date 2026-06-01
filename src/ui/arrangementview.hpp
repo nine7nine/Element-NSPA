@@ -514,6 +514,18 @@ private:
     bool wasRecording_ = false;
     double lastBeat_   = 0.0;
 
+    /* Playhead repaint is driven off the peer's vertical-blank tick (vsync-
+     * cadenced, phase-aligned to the present) instead of the 30Hz transport
+     * timer -- an independent timer beats against the peer's vblank and reads
+     * as judder.  The timer still owns transport bookkeeping (dispatch / env /
+     * loop / record), which must run even when the arranger isn't the visible
+     * tab; only the cosmetic playhead moves to the vblank (fires only while
+     * the Body is on screen).  playheadPaintPlaying_ is the vblank's own
+     * play-edge state (wasPlaying_ stays the timer's). */
+    bool playheadPaintPlaying_ = false;
+    void updatePlayheadPaint();
+    juce::VBlankAttachment playheadVBlank_;
+
     /* Captured at initializeView -- identity of the session
      * ValueTree this view was built against.  writeViewStateToSession
      * compares against the live session before writing; if a session
