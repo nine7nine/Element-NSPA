@@ -14,6 +14,8 @@ namespace {
 const juce::Identifier kCcTag      { "cc" };
 const juce::Identifier kCcNumAttr  { "n" };
 const juce::Identifier kCcChanAttr { "ch" };
+const juce::Identifier kParamNidAttr { "nid" };  // param target nodeId (param lane)
+const juce::Identifier kParamPidAttr { "pid" };  // param target paramId token
 const juce::Identifier kPointTag   { "p" };
 const juce::Identifier kPtTAttr    { "t" };   // tBeats (region-local)
 const juce::Identifier kPtVAttr    { "v" };   // valueNormalized
@@ -64,9 +66,19 @@ int MidiCcLane::ccValueAtBeats (double localBeats) const noexcept
 juce::ValueTree MidiCcLane::toValueTree() const
 {
     juce::ValueTree v (kCcTag);
-    v.setProperty (kCcNumAttr, ccNumber, nullptr);
-    if (channel != 1)
-        v.setProperty (kCcChanAttr, channel, nullptr);
+    if (isParam())
+    {
+        /* Param lane: persist the target node + paramId; cc/channel are
+         * meaningless here so they are sparse-skipped. */
+        v.setProperty (kParamNidAttr, paramNodeId.toString(), nullptr);
+        v.setProperty (kParamPidAttr, paramId, nullptr);
+    }
+    else
+    {
+        v.setProperty (kCcNumAttr, ccNumber, nullptr);
+        if (channel != 1)
+            v.setProperty (kCcChanAttr, channel, nullptr);
+    }
 
     for (const auto& p : points)
     {
@@ -89,8 +101,17 @@ MidiCcLane MidiCcLane::fromValueTree (const juce::ValueTree& v)
     if (! v.hasType (kCcTag))
         return lane;
 
-    lane.ccNumber = (int) v.getProperty (kCcNumAttr, 1);
-    lane.channel  = (int) v.getProperty (kCcChanAttr, 1);
+    const juce::String pid = v.getProperty (kParamPidAttr, juce::String()).toString();
+    if (pid.isNotEmpty())
+    {
+        lane.paramId     = pid;
+        lane.paramNodeId = juce::Uuid (v.getProperty (kParamNidAttr, juce::String()).toString());
+    }
+    else
+    {
+        lane.ccNumber = (int) v.getProperty (kCcNumAttr, 1);
+        lane.channel  = (int) v.getProperty (kCcChanAttr, 1);
+    }
 
     for (int i = 0; i < v.getNumChildren(); ++i)
     {

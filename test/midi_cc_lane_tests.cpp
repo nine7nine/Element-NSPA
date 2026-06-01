@@ -228,4 +228,86 @@ BOOST_AUTO_TEST_CASE (clone_copies_cc_lanes)
     BOOST_CHECK_EQUAL (r.loadCcSnapshot()->size(), (size_t) 1);
 }
 
+//==============================================================================
+// #11 Phase 2a -- param-target lanes (param OR cc, one abstraction).
+
+BOOST_AUTO_TEST_CASE (param_lane_identity_and_value_tree_round_trip)
+{
+    const juce::Uuid node;
+    MidiCcLane lane;
+    lane.paramNodeId = node;
+    lane.paramId     = "7";                 // stable param index token
+    lane.points      = { pt (0.0, 0.1), pt (2.0, 0.9, 0.65, 0.2) };
+
+    BOOST_CHECK (lane.isParam());
+
+    const auto back = MidiCcLane::fromValueTree (lane.toValueTree());
+    BOOST_CHECK (back.isParam());
+    BOOST_CHECK_EQUAL (back.paramId.toStdString(), std::string ("7"));
+    BOOST_CHECK_EQUAL (back.paramNodeId.toString().toStdString(),
+                       node.toString().toStdString());
+    BOOST_REQUIRE_EQUAL (back.points.size(), (size_t) 2);
+    BOOST_CHECK (nearly (back.points[1].curve.offsetT, 0.65));
+    BOOST_CHECK (nearly (back.points[1].curve.offsetV, 0.2));
+
+    /* Sampling is identical to a CC lane (shared curve model). */
+    BOOST_CHECK (nearly (back.valueAtBeats (0.0), 0.1));
+}
+
+BOOST_AUTO_TEST_CASE (param_lane_never_collides_with_cc_lane)
+{
+    MidiNoteRegion r;
+    const juce::Uuid node;
+
+    /* A CC lane on cc=1/ch=1 and a param lane whose default cc fields are
+     * ALSO 1/1 must coexist -- identity is target-kind-aware. */
+    r.setCcLane (1, 1, { pt (0.0, 0.0), pt (1.0, 1.0) });
+    r.setParamLane (node, "1", { pt (0.0, 0.5), pt (1.0, 0.7) });
+
+    const auto* s = r.loadCcSnapshot();
+    BOOST_REQUIRE_EQUAL (s->size(), (size_t) 2);
+
+    /* CC lanes sort before param lanes. */
+    BOOST_CHECK (! (*s)[0].isParam());
+    BOOST_CHECK ((*s)[1].isParam());
+    BOOST_CHECK_EQUAL ((*s)[1].paramId.toStdString(), std::string ("1"));
+
+    /* Upsert replaces the param lane in place; doesn't touch the CC lane. */
+    r.setParamLane (node, "1", { pt (0.0, 0.25) });
+    s = r.loadCcSnapshot();
+    BOOST_REQUIRE_EQUAL (s->size(), (size_t) 2);
+    BOOST_CHECK_EQUAL ((*s)[1].points.size(), (size_t) 1);
+
+    /* Removing the CC lane leaves the param lane, and vice-versa. */
+    r.removeCcLane (1, 1);
+    s = r.loadCcSnapshot();
+    BOOST_REQUIRE_EQUAL (s->size(), (size_t) 1);
+    BOOST_CHECK (s->front().isParam());
+
+    r.removeParamLane (node, "1");
+    BOOST_CHECK (r.loadCcSnapshot()->empty());
+}
+
+BOOST_AUTO_TEST_CASE (region_round_trip_preserves_param_lane)
+{
+    MidiNoteRegion r;
+    const juce::Uuid node;
+    r.setCcLane (11, 1, { pt (0.0, 0.2), pt (2.0, 0.8) });
+    r.setParamLane (node, "3", { pt (0.0, 0.1), pt (4.0, 0.9, 0.4, -0.15) });
+
+    auto back = MidiNoteRegion::fromValueTree (r.toValueTree());
+    BOOST_REQUIRE (back != nullptr);
+    const auto* cc = back->loadCcSnapshot();
+    BOOST_REQUIRE_EQUAL (cc->size(), (size_t) 2);
+
+    /* CC lane first, param lane second (sorted). */
+    BOOST_CHECK (! (*cc)[0].isParam());
+    BOOST_CHECK_EQUAL ((*cc)[0].ccNumber, 11);
+    BOOST_REQUIRE ((*cc)[1].isParam());
+    BOOST_CHECK_EQUAL ((*cc)[1].paramId.toStdString(), std::string ("3"));
+    BOOST_CHECK_EQUAL ((*cc)[1].paramNodeId.toString().toStdString(),
+                       node.toString().toStdString());
+    BOOST_CHECK (nearly ((*cc)[1].points[1].curve.offsetV, -0.15));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

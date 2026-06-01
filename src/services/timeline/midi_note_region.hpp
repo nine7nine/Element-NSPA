@@ -239,6 +239,15 @@ public:
     /** Remove the (ccNumber, channel) lane, if present. */
     void removeCcLane (int ccNumber, int channel) noexcept;
 
+    /** Param-target counterparts of setCcLane / removeCcLane (#11): upsert
+     *  / remove the clip-local lane that drives node `nodeId`'s parameter
+     *  `paramId`.  Identity is (nodeId, paramId); a param lane never
+     *  collides with a CC lane.  Empty `points` removes the lane.  Message
+     *  thread only -- same COW publish discipline as the CC variants. */
+    void setParamLane (const juce::Uuid& nodeId, const juce::String& paramId,
+                       MidiCcLane::PointList points);
+    void removeParamLane (const juce::Uuid& nodeId, const juce::String& paramId) noexcept;
+
     /** Drain the trash deque.  Called on the message thread by the
      *  arrangement view's AsyncUpdater tick (Phase 4 wiring) or by
      *  tests directly.  Safe to call from any thread that isn't the

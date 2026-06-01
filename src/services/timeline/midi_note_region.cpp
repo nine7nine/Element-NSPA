@@ -214,10 +214,18 @@ void MidiNoteRegion::sweepTrash() noexcept
 //==============================================================================
 
 namespace {
-/* CC lanes are sorted by (ccNumber, channel) so identity lookup +
- * persistence order are stable. */
+/* Lanes are sorted so identity lookup + persistence order are stable:
+ * CC lanes first (by ccNumber, channel), then param lanes (by paramId,
+ * then nodeId).  isParam() is the primary key so the two kinds never
+ * interleave. */
 inline bool ccLaneLess (const MidiCcLane& a, const MidiCcLane& b) noexcept
 {
+    if (a.isParam() != b.isParam()) return ! a.isParam();   // CC lanes first
+    if (a.isParam())
+    {
+        if (a.paramId != b.paramId) return a.paramId < b.paramId;
+        return a.paramNodeId.toString() < b.paramNodeId.toString();
+    }
     if (a.ccNumber != b.ccNumber) return a.ccNumber < b.ccNumber;
     return a.channel < b.channel;
 }
@@ -245,7 +253,7 @@ void MidiNoteRegion::setCcLane (int ccNumber, int channel, MidiCcLane::PointList
     {
         auto it = std::find_if (copy.begin(), copy.end(),
             [&] (const MidiCcLane& l) noexcept
-            { return l.ccNumber == ccNumber && l.channel == channel; });
+            { return ! l.isParam() && l.ccNumber == ccNumber && l.channel == channel; });
 
         if (points.empty())
         {
@@ -282,7 +290,55 @@ void MidiNoteRegion::removeCcLane (int ccNumber, int channel) noexcept
     {
         copy.erase (std::remove_if (copy.begin(), copy.end(),
                        [&] (const MidiCcLane& l) noexcept
-                       { return l.ccNumber == ccNumber && l.channel == channel; }),
+                       { return ! l.isParam() && l.ccNumber == ccNumber && l.channel == channel; }),
+                    copy.end());
+    });
+}
+
+void MidiNoteRegion::setParamLane (const juce::Uuid& nodeId, const juce::String& paramId,
+                                   MidiCcLane::PointList points)
+{
+    mutateCcAndPublish ([&] (CcLaneList& copy)
+    {
+        auto it = std::find_if (copy.begin(), copy.end(),
+            [&] (const MidiCcLane& l) noexcept
+            { return l.isParam() && l.paramNodeId == nodeId && l.paramId == paramId; });
+
+        if (points.empty())
+        {
+            if (it != copy.end())
+                copy.erase (it);
+            return;
+        }
+
+        std::sort (points.begin(), points.end(),
+                   [] (const dsp::automation::AutomationPoint& a,
+                       const dsp::automation::AutomationPoint& b) noexcept
+                   { return a.tBeats < b.tBeats; });
+
+        if (it != copy.end())
+        {
+            it->points = std::move (points);
+        }
+        else
+        {
+            MidiCcLane lane;
+            lane.paramNodeId = nodeId;
+            lane.paramId     = paramId;
+            lane.points      = std::move (points);
+            copy.push_back (std::move (lane));
+            std::sort (copy.begin(), copy.end(), ccLaneLess);
+        }
+    });
+}
+
+void MidiNoteRegion::removeParamLane (const juce::Uuid& nodeId, const juce::String& paramId) noexcept
+{
+    mutateCcAndPublish ([&] (CcLaneList& copy)
+    {
+        copy.erase (std::remove_if (copy.begin(), copy.end(),
+                       [&] (const MidiCcLane& l) noexcept
+                       { return l.isParam() && l.paramNodeId == nodeId && l.paramId == paramId; }),
                     copy.end());
     });
 }

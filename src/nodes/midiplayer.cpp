@@ -955,6 +955,11 @@ void MidiPlayerNode::emitRegionCcInBlock (const RegionEntry& entry,
         const double srcLocal = srcOffset + lb;
         for (const auto& lane : *cc)
         {
+            /* Param-target lanes are applied to a node parameter, not
+             * emitted as MIDI CC -- skip them here (they would otherwise
+             * spam CC on their default cc/channel).  #11 Phase 2b adds the
+             * param-apply path. */
+            if (lane.isParam()) continue;
             const int ch  = juce::jlimit (1, 16, lane.channel);
             const int v   = lane.ccValueAtBeats (srcLocal);
             const int idx = ccCacheIndex (ch, lane.ccNumber);
@@ -993,6 +998,8 @@ void MidiPlayerNode::emitSessionClipCcInBlock (SessionClipSlot& slot,
 
         for (const auto& lane : *cc)
         {
+            /* Param-target lanes are not MIDI CC -- skip (see emitRegionCcInBlock). */
+            if (lane.isParam()) continue;
             const int ch  = juce::jlimit (1, 16, lane.channel);
             const int v   = lane.ccValueAtBeats (lb);
             const int idx = ccCacheIndex (ch, lane.ccNumber);

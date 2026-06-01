@@ -52,7 +52,7 @@ BOOST_AUTO_TEST_CASE (overlay_binding_preserves_owner_lane)
 
 BOOST_AUTO_TEST_CASE (sparse_defaults_round_trip)
 {
-    /* A binding left at defaults (height 48, expanded, null owner)
+    /* A binding left at defaults (height 90, expanded, null owner)
      * must omit those attrs yet reload to the same defaults. */
     AutomationBinding b;
     b.id      = juce::Uuid();
@@ -65,7 +65,7 @@ BOOST_AUTO_TEST_CASE (sparse_defaults_round_trip)
 
     const auto restored = AutomationBinding::fromValueTree (tree);
     BOOST_CHECK (restored.ownerLaneId.isNull());
-    BOOST_CHECK_EQUAL (restored.heightPx, 48);
+    BOOST_CHECK_EQUAL (restored.heightPx, 90);
     BOOST_CHECK (restored.expanded);
 }
 

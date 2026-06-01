@@ -12,31 +12,62 @@
 
 namespace element {
 
-/** One clip-local MIDI CC automation lane inside a MidiNoteRegion.
+/** One clip-local automation lane inside a MidiNoteRegion.
  *
- *  A piano-roll "CC lane" edits a continuous controller (mod wheel = 1,
- *  expression = 11, etc.) that rides WITH the clip -- it loops with the
- *  region and plays only when the region/clip plays.  This is distinct
- *  from timeline parameter automation (song-owned, AutomationEngine):
- *  CC lanes are MIDI data emitted by the MidiPlayerNode alongside the
- *  region's notes.  See memory project_automation_timeline_vs_clip_semantics.
+ *  A piano-roll automation lane edits a curve that rides WITH the clip --
+ *  it loops with the region and plays only when the region/clip plays.
+ *  This is distinct from timeline parameter automation (song-owned,
+ *  AutomationEngine).  See memory project_automation_timeline_vs_clip_semantics.
+ *
+ *  ## Target (CC or plugin/node param) -- #11 unification
+ *
+ *  A lane targets EITHER a MIDI continuous controller OR a plugin/node
+ *  parameter, mirroring the arranger's AutomationTargetKey:
+ *   - CC lane   (default): isParam()==false.  Identity = (ccNumber,
+ *     channel).  The MidiPlayerNode emits a controllerEvent alongside the
+ *     region's notes (rides the clip's MIDI output -- works with external
+ *     gear too).
+ *   - Param lane: paramId non-empty.  Identity = (paramNodeId, paramId).
+ *     The MidiPlayerNode applies the sampled value to the resolved node
+ *     parameter while the region plays (clip-local + looped).  paramId is
+ *     the stable index token (automation::encodeNodeParamId).
+ *  The curve points + sampling are identical either way -- only emission
+ *  differs.  ccNumber/channel are ignored when isParam().
  *
  *  The curve reuses dsp::automation::AutomationPoint verbatim -- tBeats
  *  is local to the region start, valueNormalized is [0, 1] (mapped to a
- *  0..127 CC value at emit: round(v * 127)), and each point carries the
- *  per-segment CurveOptions.  Reusing AutomationPoint lets the piano-roll
- *  CC editor share the exact curve paint + evaluate code the timeline
- *  automation overlays use.
- *
- *  Identity is (ccNumber, channel): a region holds at most one lane per
- *  (cc, channel) pair. */
+ *  0..127 CC value at emit: round(v * 127), or applied directly to a
+ *  normalized param), and each point carries the per-segment CurveOptions.
+ *  Reusing AutomationPoint lets the piano-roll editor share the exact
+ *  curve paint + evaluate code the timeline automation overlays use. */
 struct MidiCcLane
 {
     using PointList = std::vector<dsp::automation::AutomationPoint>;
 
-    int       ccNumber { 1 };   // 0..127
-    int       channel  { 1 };   // 1..16
+    int       ccNumber { 1 };   // 0..127       (CC lane only)
+    int       channel  { 1 };   // 1..16        (CC lane only)
+
+    /** Param-target fields.  When paramId is non-empty the lane targets a
+     *  node parameter (paramNodeId + paramId) instead of a MIDI CC. */
+    juce::Uuid   paramNodeId;
+    juce::String paramId;
+
     PointList points;           // sorted by tBeats ascending (region-local)
+
+    /** True when this lane drives a node/plugin parameter (vs a MIDI CC). */
+    bool isParam() const noexcept { return paramId.isNotEmpty(); }
+
+    /** Two lanes share identity (collide) when they drive the same
+     *  destination: same (nodeId, paramId) for param lanes, same
+     *  (cc, channel) for CC lanes.  A param lane and a CC lane never
+     *  collide even if their cc/channel fields happen to match. */
+    bool sameTargetAs (const MidiCcLane& o) const noexcept
+    {
+        if (isParam() != o.isParam()) return false;
+        if (isParam())
+            return paramNodeId == o.paramNodeId && paramId == o.paramId;
+        return ccNumber == o.ccNumber && channel == o.channel;
+    }
 
     /** Sample the lane's normalized value at a region-local beat,
      *  mirroring AutomationRegion::sampleAtBeats: clamps to the endpoint
