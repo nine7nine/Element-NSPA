@@ -15,7 +15,7 @@ const juce::Identifier kColourAttr    ("colour");
 const juce::Identifier kHeightAttr    ("heightPx");
 const juce::Identifier kExpandedAttr  ("expanded");
 
-constexpr int kDefaultHeightPx = 48;
+constexpr int kDefaultHeightPx = 90;   // == arranger kOverlayCurveH
 } // namespace
 
 juce::ValueTree AutomationBinding::toValueTree() const

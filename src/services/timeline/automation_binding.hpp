@@ -38,7 +38,11 @@ struct AutomationBinding
     juce::Uuid    ownerLaneId { juce::Uuid::null() };  // null => dedicated lane
     juce::String  name;                                // display cache (target param name)
     juce::Colour  colour      { 0xff'48'9a'c8 };
-    int           heightPx     { 48 };
+    /* Pixel height of the lane's automation OVERLAY curve area.  All of a
+     * lane's bindings share one superimposed area, so they carry the same
+     * value; resizing the overlay writes it to each.  Default matches the
+     * arranger's kOverlayCurveH. */
+    int           heightPx     { 90 };
     bool          expanded     { true };
 
     /** True when this binding renders as an overlay under a parent lane

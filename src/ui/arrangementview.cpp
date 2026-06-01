@@ -612,6 +612,18 @@ public:
         }
         if (e.y < kRulerH) return;   /* ruler click in label gutter */
 
+        /* Automation overlay vertical resize: grab the overlay's bottom edge.
+         * Checked first + works in any tool (it's below the envelope area). */
+        if (! e.mods.isPopupMenu())
+        {
+            const int orh = overlayResizeHandleAt (e.y);
+            if (orh >= 0)
+            {
+                overlayResize_ = OverlayResize { true, orh, e.y, laneOverlayCurveH (orh) };
+                return;
+            }
+        }
+
         /* Per-lane vertical resize: grab a lane's bottom divider + drag.
          * Disabled in the Env tool, where the bottom edge is for envelope
          * point editing instead (so resize never steals curve clicks). */
@@ -1489,6 +1501,19 @@ public:
 
     void mouseDrag (const MouseEvent& e) override
     {
+        /* Automation overlay vertical resize takes precedence once begun. */
+        if (overlayResize_.active)
+        {
+            if (overlayResize_.laneIdx >= 0 && overlayResize_.laneIdx < owner.lanes_.size())
+            {
+                setLaneOverlayCurveH (overlayResize_.laneIdx,
+                                      overlayResize_.startH + (e.y - overlayResize_.startY));
+                resizeForLanes();
+                repaint();
+            }
+            return;
+        }
+
         /* Per-lane vertical resize takes precedence once begun. */
         if (laneResize_.active)
         {
@@ -1818,6 +1843,13 @@ public:
 
     void mouseUp (const MouseEvent& e) override
     {
+        if (overlayResize_.active)
+        {
+            overlayResize_ = OverlayResize {};
+            owner.writeLanesToSession();   // persist binding heightPx (overlay height)
+            return;
+        }
+
         if (laneResize_.active)
         {
             laneResize_ = LaneResize {};
@@ -2096,6 +2128,12 @@ public:
         if (e.y < kRulerH)
         {
             setMouseCursor (juce::MouseCursor::NormalCursor);
+            return;
+        }
+        /* Automation overlay vertical-resize handle (overlay bottom edge). */
+        if (overlayResizeHandleAt (e.y) >= 0)
+        {
+            setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
             return;
         }
         /* Per-lane vertical-resize handle (lane bottom divider) -- not in
@@ -3953,6 +3991,34 @@ public:
         return -1;
     }
 
+    /* Vertical resize of a lane's automation OVERLAY: grab the overlay's
+     * bottom divider (= the lane's full bottom) and drag.  Only lanes with
+     * a visible (expanded, non-empty) overlay qualify; the band sits above
+     * the divider so it never bleeds into the next lane.  Works in any tool
+     * (it's a layout op, not envelope editing). */
+    struct OverlayResize { bool active = false; int laneIdx = -1; int startY = 0; int startH = 0; };
+    OverlayResize overlayResize_;
+
+    int overlayResizeHandleAt (int y) const noexcept
+    {
+        for (int i = 0; i < owner.lanes_.size(); ++i)
+        {
+            if (overlayStackHeight (i) <= 0) continue;
+            const int bottom = laneClipTopY (i) + laneFullHeight (i);
+            if (y <= bottom + 1 && y >= bottom - 2 * kLaneResizeGrabPx) return i;
+        }
+        return -1;
+    }
+
+    /** Write a new overlay curve height to every binding of lane `laneIdx`
+     *  (they share one superimposed area) + relayout. */
+    void setLaneOverlayCurveH (int laneIdx, int h)
+    {
+        const int clamped = juce::jlimit (kOverlayCurveHMin, kOverlayCurveHMax, h);
+        for (int bi : bindingIndicesForLane (laneIdx))
+            owner.automationBindings_.getReference (bi).heightPx = clamped;
+    }
+
     /* Automation overlay metrics.  A lane gets ONE bounded overlay area
      * (NOT a stacked row per parameter): a thin chip-rail header + a single
      * curve area in which ALL the lane's automation curves render
@@ -3961,11 +4027,24 @@ public:
      * ghosts.  The chip rail scales with param count, the lane height does
      * not -- the "no 50 stacked lanes" model. */
     static constexpr int kOverlayHeaderH   = 16;   // chip-rail strip
-    static constexpr int kOverlayCurveH    = 90;   // superimposed curve area
+    static constexpr int kOverlayCurveH    = 90;   // default superimposed curve area
     static constexpr int kOverlayCurvePadY = 5;    // inset within the curve area
+    static constexpr int kOverlayCurveHMin = 40;   // resize clamp
+    static constexpr int kOverlayCurveHMax = 360;
+
+    /** Per-lane height of the superimposed curve area.  Stored on the lane's
+     *  bindings' heightPx (all share one area); resizing writes each.  The
+     *  vertical-resize handle on the overlay's bottom edge sets it. */
+    int laneOverlayCurveH (int laneIdx) const noexcept
+    {
+        const int bi = activeBindingIndexForLane (laneIdx);
+        if (bi < 0) return kOverlayCurveH;
+        return juce::jlimit (kOverlayCurveHMin, kOverlayCurveHMax,
+                             owner.automationBindings_.getReference (bi).heightPx);
+    }
 
     /** Height of lane `i`'s overlay area: 0 when collapsed or no bindings,
-     *  else a FIXED header + curve height independent of binding count.
+     *  else the chip-rail header + the (per-lane resizable) curve height.
      *  The single seam where variable-row height enters the layout model. */
     int overlayStackHeight (int laneIdx) const noexcept
     {
@@ -3973,7 +4052,7 @@ public:
         const auto laneId = owner.lanes_.getReference (laneIdx).id;
         if (owner.collapsedAutomationLanes_.count (laneId) > 0) return 0;
         if (owner.automationBindingCountForLane (laneId) == 0) return 0;
-        return kOverlayHeaderH + kOverlayCurveH;
+        return kOverlayHeaderH + laneOverlayCurveH (laneIdx);
     }
 
     /** Body-coord Y of the top of lane `i`'s overlay area (just below the
@@ -3990,7 +4069,7 @@ public:
         const int top = overlayAreaTopY (laneIdx) + kOverlayHeaderH + kOverlayCurvePadY;
         return Rectangle<int> (kLabelW, top,
                                juce::jmax (1, getWidth() - kLabelW),
-                               juce::jmax (1, kOverlayCurveH - kOverlayCurvePadY * 2));
+                               juce::jmax (1, laneOverlayCurveH (laneIdx) - kOverlayCurvePadY * 2));
     }
 
     /** Array indices of the bindings owned by lane `laneIdx`, in order. */
@@ -5919,9 +5998,10 @@ private:
         if (owner.collapsedAutomationLanes_.count (laneId) > 0) return;
         if (owner.automationBindingCountForLane (laneId) == 0) return;
 
-        const int areaTop = overlayAreaTopY (laneIdx);
+        const int areaTop   = overlayAreaTopY (laneIdx);
+        const int curveH    = laneOverlayCurveH (laneIdx);
         const Rectangle<int> areaRect (0, areaTop, getWidth(),
-                                       kOverlayHeaderH + kOverlayCurveH);
+                                       kOverlayHeaderH + curveH);
         if (! g.getClipBounds().intersects (areaRect)) return;
 
         const auto curveArea = overlayCurveArea (laneIdx);
@@ -5931,7 +6011,7 @@ private:
         /* Backdrop (curve area) + header strip + centre reference line. */
         g.setColour (juce::Colour (0xff'10'10'12));
         g.fillRect (Rectangle<int> (kLabelW, areaTop + kOverlayHeaderH,
-                                    getWidth() - kLabelW, kOverlayCurveH));
+                                    getWidth() - kLabelW, curveH));
         g.setColour (juce::Colour (0xff'17'17'1b));
         g.fillRect (Rectangle<int> (0, areaTop, getWidth(), kOverlayHeaderH));
         g.setColour (juce::Colours::white.withAlpha (0.05f));
@@ -5964,9 +6044,12 @@ private:
                 : b.colour.withMultipliedBrightness (0.32f).withAlpha (0.85f);
             g.setColour (fill);
             g.fillRect (c.rect);
-            g.setColour (active ? juce::Colours::white.withAlpha (0.9f)
-                                : b.colour.withAlpha (0.55f));
-            g.drawRect (c.rect, active ? 2 : 1);
+            /* No white active outline (distracting) -- a subtle same-hue
+             * border gives the tab definition; the solid fill already marks
+             * it active. */
+            g.setColour (active ? b.colour.brighter (0.25f)
+                                : b.colour.withAlpha (0.45f));
+            g.drawRect (c.rect, 1);
 
             g.setColour (active ? b.colour.contrasting (0.92f)
                                 : b.colour.brighter (0.3f).withAlpha (0.95f));
@@ -5981,7 +6064,7 @@ private:
 
         /* Bottom divider for the overlay area. */
         g.setColour (juce::Colour (0xff'2a'2a'2e));
-        g.drawHorizontalLine (areaTop + kOverlayHeaderH + kOverlayCurveH - 1,
+        g.drawHorizontalLine (areaTop + kOverlayHeaderH + curveH - 1,
                               0.0f, (float) getWidth());
     }
 
