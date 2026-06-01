@@ -372,6 +372,101 @@ void PianoRollGrid::selectClear()
 
 void PianoRollGrid::paint (juce::Graphics& g)
 {
+    auto* region = resolveBoundRegion();
+    if (region != nullptr && juce::jmax (1.0, region->lengthBeats) != regionLenBeats_)
+    {
+        /* Region length changed since last paint (e.g. user resized
+         * a region in the arrangement view).  Re-sync component width
+         * so the horizontal scrollbar tracks correctly.  Done from
+         * paint() rather than a separate observer because the
+         * resolver lookup happens here anyway.  Must run before the
+         * cache key is computed (regionLenBeats_ feeds the key). */
+        regionLenBeats_ = juce::jmax (1.0, region->lengthBeats);
+        if (auto* vp = findParentComponentOfClass<juce::Viewport>())
+            updateSizeForViewport (vp->getMaximumVisibleWidth(),
+                                    vp->getMaximumVisibleHeight());
+    }
+
+    /* Static content (bg + grid + ruler + notes) is cached to an image
+     * so a drag tick or a surgical playhead strip is a blit, not a
+     * full note re-rasterise.  See refreshContentCache. */
+    refreshContentCache (region);
+    if (contentCache_.isValid())
+        g.drawImageAt (contentCache_, cacheOrigin_.getX(), cacheOrigin_.getY());
+
+    /* Live overlays -- change every frame, painted directly over the
+     * cached blit (and clipped to the surgical strip when only the
+     * playhead moved). */
+    paintPlayhead (g);
+    paintActiveDragOverlay (g);
+}
+
+void PianoRollGrid::refreshContentCache (MidiNoteRegion* region)
+{
+    const auto vr = visibleRect();
+    if (vr.getWidth() <= 0 || vr.getHeight() <= 0)
+    {
+        contentCache_ = juce::Image();   /* nothing visible -- drop the cache */
+        return;
+    }
+
+    auto* kb = parent_.getKeyboard();
+    const int lo = kb != nullptr ? kb->getLowestVisibleNoteNumber()  : 0;
+    const int hi = kb != nullptr ? kb->getHighestVisibleNoteNumber() : 127;
+    const int beatsPerBar = monitor_ != nullptr
+        ? juce::jmax (1, (int) monitor_->beatsPerBar.get())
+        : 4;
+
+    /* Order-independent signature over a note-id set: XOR-mix so the
+     * unordered_set iteration order can't change the result. */
+    auto sigOf = [] (const std::unordered_set<std::uint64_t>& s) noexcept
+    {
+        std::uint64_t sig = s.size();
+        for (auto id : s) sig ^= (id * 0x9E37'79B9'7F4A'7C15ull);
+        return sig;
+    };
+
+    ContentKey key;
+    key.vx          = vr.getX();
+    key.vy          = vr.getY();
+    key.vw          = vr.getWidth();
+    key.vh          = vr.getHeight();
+    key.pxPerBeat   = pxPerBeat_;
+    key.lo          = lo;
+    key.hi          = hi;
+    key.beatsPerBar = beatsPerBar;
+    key.regionLen   = regionLenBeats_;
+    key.snap        = region != nullptr ? (const void*) region->loadSnapshot() : nullptr;
+    key.colourArgb  = region != nullptr ? region->colour.getARGB() : 0;
+    key.looped      = region != nullptr ? region->looped : false;
+    key.loopLen     = region != nullptr ? region->loopLengthBeats : 0.0;
+    key.selSig      = sigOf (selectedNoteIds_);
+    key.previewSig  = sigOf (previewAffectedIds_);
+
+    if (contentCache_.isValid()
+        && cacheOrigin_ == vr.getPosition()
+        && contentCache_.getWidth()  == vr.getWidth()
+        && contentCache_.getHeight() == vr.getHeight()
+        && cacheKey_ == key)
+        return;   /* still valid -- nothing keyed changed */
+
+    /* RGB (opaque): the content layer fully covers its bounds, so no
+     * alpha is needed and the blit is a straight copy. */
+    contentCache_ = juce::Image (juce::Image::RGB, vr.getWidth(), vr.getHeight(), false);
+    {
+        juce::Graphics ig (contentCache_);
+        /* Shift the image's coordinate system into component space so
+         * the existing paint helpers (which work in component coords +
+         * cull to visibleRect()) draw unchanged. */
+        ig.setOrigin (-vr.getX(), -vr.getY());
+        paintContentLayer (ig, region);
+    }
+    cacheKey_    = key;
+    cacheOrigin_ = vr.getPosition();
+}
+
+void PianoRollGrid::paintContentLayer (juce::Graphics& g, MidiNoteRegion* region)
+{
     /* Body background: mid-dark grey lifted from near-black so the
      * grid + notes have visual breathing room.  Matches Element's
      * contentBackgroundColor (0xff141414) shifted a hair to keep
@@ -401,20 +496,6 @@ void PianoRollGrid::paint (juce::Graphics& g)
                               (float) body.getBottom());
     }
 
-    auto* region = resolveBoundRegion();
-    if (region != nullptr && juce::jmax (1.0, region->lengthBeats) != regionLenBeats_)
-    {
-        /* Region length changed since last paint (e.g. user resized
-         * a region in the arrangement view).  Re-sync component width
-         * so the horizontal scrollbar tracks correctly.  Done from
-         * paint() rather than a separate observer because the
-         * resolver lookup happens here anyway. */
-        regionLenBeats_ = juce::jmax (1.0, region->lengthBeats);
-        if (auto* vp = findParentComponentOfClass<juce::Viewport>())
-            updateSizeForViewport (vp->getMaximumVisibleWidth(),
-                                    vp->getMaximumVisibleHeight());
-    }
-
     const int beatsPerBar = monitor_ != nullptr
         ? juce::jmax (1, (int) monitor_->beatsPerBar.get())
         : 4;
@@ -428,8 +509,6 @@ void PianoRollGrid::paint (juce::Graphics& g)
     }
 
     paintNotes (g, *region);
-    paintPlayhead (g);
-    paintActiveDragOverlay (g);
 }
 
 void PianoRollGrid::paintEmptyState (juce::Graphics& g)

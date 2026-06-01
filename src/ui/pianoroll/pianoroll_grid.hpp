@@ -307,6 +307,55 @@ private:
     void paintNotes         (juce::Graphics&, const MidiNoteRegion& region);
     void paintActiveDragOverlay (juce::Graphics&);
 
+    /** Paints the *static* content layer (background + beyond-region
+     *  zone + bar grid + ruler + notes/empty-state) -- everything that
+     *  does NOT change on playhead motion or during a live drag.  Run
+     *  into an offscreen image by refreshContentCache; the playhead +
+     *  active-drag overlay are painted live on top of the blit. */
+    void paintContentLayer (juce::Graphics&, MidiNoteRegion* region);
+
+    /* ---- Static content-layer image cache --------------------------
+     * The note layer is expensive (per-note rect + drawText label) and
+     * was re-rasterised on every full repaint -- i.e. on every
+     * mouse-drag tick (NoteDrag mutates nothing until mouseUp, so the
+     * snapshot is byte-identical) and behind every surgical playhead
+     * strip.  We cache it to an image keyed on every input that can
+     * change what it draws; a paint with an unchanged key is a plain
+     * blit (the GL backend reuses the uploaded texture).  The snapshot
+     * pointer is the content-version token: publishSnapshot swaps in a
+     * fresh heap allocation per edit (old one parked in a trash deque,
+     * so no ABA address reuse), so the pointer changes iff notes did. */
+    struct ContentKey
+    {
+        int vx { 0 }, vy { 0 }, vw { 0 }, vh { 0 };
+        int pxPerBeat { 0 }, lo { 0 }, hi { 0 }, beatsPerBar { 0 };
+        double regionLen { 0.0 }, loopLen { 0.0 };
+        const void* snap { nullptr };
+        std::uint32_t colourArgb { 0 };
+        bool looped { false };
+        std::uint64_t selSig { 0 }, previewSig { 0 };
+
+        bool operator== (const ContentKey& o) const noexcept
+        {
+            return vx == o.vx && vy == o.vy && vw == o.vw && vh == o.vh
+                && pxPerBeat == o.pxPerBeat && lo == o.lo && hi == o.hi
+                && beatsPerBar == o.beatsPerBar && regionLen == o.regionLen
+                && loopLen == o.loopLen && snap == o.snap
+                && colourArgb == o.colourArgb && looped == o.looped
+                && selSig == o.selSig && previewSig == o.previewSig;
+        }
+        bool operator!= (const ContentKey& o) const noexcept { return ! (*this == o); }
+    };
+
+    /** Rebuilds contentCache_ if any keyed input changed (or it is
+     *  empty / wrongly sized); otherwise leaves the valid cache in
+     *  place.  Called once at the top of paint(). */
+    void refreshContentCache (MidiNoteRegion* region);
+
+    juce::Image          contentCache_;            /* RGB, visible-viewport sized */
+    ContentKey           cacheKey_;                /* inputs the cache was built from */
+    juce::Point<int>     cacheOrigin_ { 0, 0 };    /* component coord of cache pixel (0,0) */
+
     /** Body rectangle (everything below the ruler).  Note paint + hit
      *  test work in body-local Y; the ruler claims the top kRulerH px. */
     juce::Rectangle<int> bodyBounds() const noexcept
