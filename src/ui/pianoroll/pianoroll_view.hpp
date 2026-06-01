@@ -70,10 +70,11 @@ public:
      *  region mutation and undo-push paths). */
     PianoRollGrid* getGrid() const noexcept { return grid_.get(); }
 
-    /** Repaint the controller lanes (velocity + CC) -- the grid's playhead
-     *  timer calls this while transport rolls so their playhead tracks
-     *  live playback alongside the grid's. */
-    void repaintControllerLanes();
+    /** Surgically update the controller lanes' (velocity + CC) playhead --
+     *  the grid's playhead timer calls this while transport rolls so their
+     *  playhead tracks live playback alongside the grid's, repainting only
+     *  the old + new playhead strips (not the whole lane). */
+    void updateControllerLanePlayheads();
 
     /** Active tool selection.  Mouse handlers in the grid branch on
      *  this; selection paint highlights respect it too. */

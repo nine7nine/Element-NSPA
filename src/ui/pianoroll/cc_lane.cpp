@@ -60,6 +60,21 @@ CcLane::CcLane (PianoRollView& parent, Services& services)
     : parent_ (parent), services_ (services)
 {
     setMouseCursor (juce::MouseCursor::NormalCursor);
+    setOpaque (true);   // paint() fillAll()s the whole bounds -> no overdraw
+}
+
+void CcLane::updatePlayhead()
+{
+    auto* grid = parent_.getGrid();
+    if (grid == nullptr) return;
+    const double localBeat = grid->playheadLocalBeat();
+    const int newPx = (localBeat >= 0.0)
+                          ? xForBeat (localBeat, grid->getPxPerBeat()) : -1;
+    if (newPx == playheadPxX_) return;
+    const int top = kHeaderH, h = juce::jmax (1, getHeight() - kHeaderH);
+    if (playheadPxX_ >= 0) repaint (playheadPxX_ - 2, top, 5, h);
+    if (newPx       >= 0)  repaint (newPx - 2,        top, 5, h);
+    playheadPxX_ = newPx;
 }
 
 CcLane::~CcLane() = default;
@@ -280,17 +295,14 @@ void CcLane::paint (juce::Graphics& g)
 
     const auto area = curveArea();
 
-    /* Playhead -- mirror the grid's so live playback tracks the automation
-     * position here too (region-local beat from the grid, mapped through
-     * this lane's mirrored horizontal scroll). */
+    /* Playhead -- draw at the committed px (set by updatePlayhead), NOT a
+     * fresh transport read, so the line stays inside its repaint strip
+     * (see PianoRollGrid::paintPlayhead for why). */
     auto drawPlayhead = [&]
     {
-        const double localBeat = grid->playheadLocalBeat();
-        if (localBeat < 0.0) return;
-        const int px = xForBeat (localBeat, pxPerBeat);
-        if (px < 0 || px >= getWidth()) return;
+        if (playheadPxX_ < 0 || playheadPxX_ >= getWidth()) return;
         g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));
-        g.drawVerticalLine (px, (float) kHeaderH, (float) getHeight());
+        g.drawVerticalLine (playheadPxX_, (float) kHeaderH, (float) getHeight());
     };
 
     /* Centre (0.5) reference + region-end fence (mirrors VelocityLane). */

@@ -55,6 +55,10 @@ public:
     /** Make a MIDI CC the active/editable lane (channel fixed at 1). */
     void setActiveCc (int cc);
 
+    /** Surgically repaint only the old + new playhead strips (driven by the
+     *  grid's playhead timer while transport rolls). */
+    void updatePlayhead();
+
     static constexpr int kDefaultHeight = 84;
 
     MidiNoteRegion* resolveBoundRegion() const noexcept;
@@ -64,6 +68,7 @@ private:
     Services&      services_;
 
     int scrollX_  { 0 };
+    int playheadPxX_ { -1 };   // last painted playhead X (component coords)
 
     /* Active (editable) lane identity -- a CC controller OR a clip-local
      * node-parameter target (#11 unification).  All editing/paint reads

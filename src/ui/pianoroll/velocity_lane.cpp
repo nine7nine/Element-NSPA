@@ -31,6 +31,20 @@ VelocityLane::VelocityLane (PianoRollView& parent, Services& services)
     : parent_ (parent), services_ (services)
 {
     setMouseCursor (juce::MouseCursor::NormalCursor);
+    setOpaque (true);   // paint() fillAll()s the whole bounds -> no overdraw
+}
+
+void VelocityLane::updatePlayhead()
+{
+    auto* grid = parent_.getGrid();
+    if (grid == nullptr) return;
+    const double localBeat = grid->playheadLocalBeat();
+    const int newPx = (localBeat >= 0.0)
+                          ? xForBeat (localBeat, grid->getPxPerBeat()) : -1;
+    if (newPx == playheadPxX_) return;
+    if (playheadPxX_ >= 0) repaint (playheadPxX_ - 2, 0, 5, getHeight());
+    if (newPx       >= 0)  repaint (newPx - 2,        0, 5, getHeight());
+    playheadPxX_ = newPx;
 }
 
 VelocityLane::~VelocityLane() = default;
@@ -140,18 +154,13 @@ void VelocityLane::paint (juce::Graphics& g)
                         1.0f);
     }
 
-    /* Playhead -- mirror the grid + CC lane so live playback tracks
-     * unbroken across the whole editor (the velocity lane sits between
-     * them). */
-    const double phLocal = grid->playheadLocalBeat();
-    if (phLocal >= 0.0)
+    /* Playhead -- draw at the committed px (set by updatePlayhead), NOT a
+     * fresh transport read, so the line stays inside its repaint strip
+     * (see PianoRollGrid::paintPlayhead for why). */
+    if (playheadPxX_ >= 0 && playheadPxX_ < getWidth())
     {
-        const int px = xForBeat (phLocal, pxPerBeat);
-        if (px >= 0 && px < getWidth())
-        {
-            g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));
-            g.drawVerticalLine (px, 0.0f, (float) getHeight());
-        }
+        g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));
+        g.drawVerticalLine (playheadPxX_, 0.0f, (float) getHeight());
     }
 }
 

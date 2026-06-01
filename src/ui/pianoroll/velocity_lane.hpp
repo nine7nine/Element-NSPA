@@ -58,6 +58,10 @@ public:
      *  redraws lollipops at the right X. */
     void setScrollX (int x);
 
+    /** Surgically repaint only the old + new playhead strips (driven by the
+     *  grid's playhead timer while transport rolls). */
+    void updatePlayhead();
+
     /** Default lane height.  PianoRollView's resized clamps the dock
      *  body to (gridH + this) so the lane has a stable footprint. */
     static constexpr int kDefaultHeight = 72;
@@ -71,6 +75,7 @@ private:
     Services&      services_;
 
     int  scrollX_ { 0 };
+    int  playheadPxX_ { -1 };   // last painted playhead X (component coords)
 
     /* Drag state.  Mirrors NoteDrag's lifecycle but scoped to the
      * lane -- drag begins on stem-head hit + ends on mouseUp. */

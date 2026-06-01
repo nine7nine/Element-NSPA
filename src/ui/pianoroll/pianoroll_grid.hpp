@@ -259,6 +259,9 @@ private:
      * lanes get one final repaint on the play->stop edge (clears their
      * playhead) without repainting them every tick while stopped. */
     bool            lastTimerPlaying_ { false };
+    /* Last painted playhead X (grid coords), or -1 when absent.  Drives the
+     * surgical old+new strip repaint in timerCallback. */
+    int             playheadPxX_ { -1 };
 
     int             pxPerBeat_   { 64 };
     /* Cached region length from the last bind / region edit; used

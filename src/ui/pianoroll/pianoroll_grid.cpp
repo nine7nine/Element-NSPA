@@ -55,6 +55,11 @@ PianoRollGrid::PianoRollGrid (PianoRollView& parent, Services& services)
 {
     setWantsKeyboardFocus (true);
     setMouseCursor (juce::MouseCursor::NormalCursor);
+    /* Opaque: the grid fully fills its bounds every paint (paintRuler fills
+     * the ruler band, fillRect(bodyBounds()) fills the body), so JUCE can
+     * skip painting anything behind it -- no overdraw on the frequent
+     * surgical playhead repaints. */
+    setOpaque (true);
 
     if (auto* eng = services.context().audio().get())
         monitor_ = eng->getTransportMonitor();
@@ -143,13 +148,30 @@ void PianoRollGrid::resized()
 void PianoRollGrid::timerCallback()
 {
     if (! isShowing()) return;
-    repaint();
-    /* Drive the controller lanes' playhead while transport rolls (and one
-     * extra frame on the stop edge so their playhead clears) so live
-     * playback tracks across the whole editor, not just the grid. */
+
+    /* Surgical playhead update: repaint ONLY the old + new playhead strips
+     * instead of the whole grid.  A full repaint() every tick was the
+     * piano-roll's biggest cost (it re-rasterised every note into the GL
+     * texture 30x/sec, even while STOPPED).  The only thing that moves per
+     * tick is the playhead; notes / selection / preview repaint on their
+     * own edit paths.  When transport is stopped, playheadLocalBeat()
+     * returns -1 -> newPxX -1 -> the last strip clears and then nothing
+     * repaints (idle = zero frames). */
+    const double localBeat = playheadLocalBeat();
+    const int newPxX = (localBeat >= 0.0) ? (int) std::round (localBeat * pxPerBeat_) : -1;
+    if (newPxX != playheadPxX_)
+    {
+        const int top = kRulerH, h = juce::jmax (1, getHeight() - kRulerH);
+        if (playheadPxX_ >= 0) repaint (playheadPxX_ - 2, top, 5, h);
+        if (newPxX      >= 0)  repaint (newPxX - 2,       top, 5, h);
+        playheadPxX_ = newPxX;
+    }
+
+    /* Drive the controller lanes' (velocity + CC) surgical playhead too --
+     * one final tick on the play->stop edge clears theirs. */
     const bool playing = monitor_ != nullptr && monitor_->playing.get();
     if (playing || playing != lastTimerPlaying_)
-        parent_.repaintControllerLanes();
+        parent_.updateControllerLanePlayheads();
     lastTimerPlaying_ = playing;
 }
 
@@ -621,14 +643,16 @@ double PianoRollGrid::playheadLocalBeat() const noexcept
 
 void PianoRollGrid::paintPlayhead (juce::Graphics& g)
 {
-    /* Only paint when transport is actually rolling -- a parked
-     * playhead inside the region's middle is visual noise. */
-    const double localBeat = playheadLocalBeat();
-    if (localBeat < 0.0) return;
-
-    const int x = (int) std::round (localBeat * pxPerBeat_);
+    /* Draw at the x the timer last COMMITTED (playheadPxX_), NOT a fresh
+     * transport read.  The repaint strip is sized around playheadPxX_; if
+     * paint() re-read the (still-advancing) transport, the GL render thread
+     * running a few ms behind the timer would draw the line at a slightly
+     * different x than its strip covers -> the line lands outside its own
+     * repainted region on some frames -> flicker.  Tying the line to the
+     * committed px keeps strip + line in lockstep. */
+    if (playheadPxX_ < 0) return;
     g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));
-    g.drawVerticalLine (x, (float) kRulerH, (float) getHeight());
+    g.drawVerticalLine (playheadPxX_, (float) kRulerH, (float) getHeight());
 }
 
 void PianoRollGrid::paintNotes (juce::Graphics& g, const MidiNoteRegion& region)
@@ -648,7 +672,12 @@ void PianoRollGrid::paintNotes (juce::Graphics& g, const MidiNoteRegion& region)
     const auto vr = visibleRect();
     /* Cull rect: only paint notes whose pixel rect intersects what
      * the user can actually see, AND intersects the body (notes that
-     * scrolled up under the ruler are clipped). */
+     * scrolled up under the ruler are clipped).  NB: culls to the whole
+     * visible viewport (not the live clip) on purpose -- JUCE clips the
+     * actual draws to the repainted strip, so a surgical playhead repaint
+     * still only rasterises the strip, while every crossing note is
+     * guaranteed to redraw (a clip-based cull risked dropping notes under
+     * the GL partial-repaint path -> blank gaps trailing the playhead). */
     const auto cullRect = vr.getIntersection (body);
 
     /* Note style mirrors ArrangementView region paint: a darker
