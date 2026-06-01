@@ -8,12 +8,17 @@
 
 #include "services/timeline/midi_note_region.hpp"
 #include "services/timeline/midi_cc_lane.hpp"
+#include "services/automation/automation_target_resolver.hpp"
 #include "dsp/automation/curve.hpp"
 
+#include <element/context.hpp>
+#include <element/node.hpp>
 #include <element/services.hpp>
+#include <element/session.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 namespace element {
@@ -36,17 +41,6 @@ const CcChoice kCommonCcs[] = {
     { 91, "Reverb" },
     { 93, "Chorus" },
 };
-
-/* Find the (cc, channel) lane's points in a region snapshot; empty if
- * absent. */
-MidiCcLane::PointList copyLanePoints (const MidiNoteRegion& region, int cc, int ch)
-{
-    if (const auto* snap = region.loadCcSnapshot())
-        for (const auto& lane : *snap)
-            if (lane.ccNumber == cc && lane.channel == ch)
-                return lane.points;
-    return {};
-}
 
 /* Distinct per-lane colour, mirroring the arranger's automationBindingColour
  * so the piano-roll CC tabs/curves read in the same palette. */
@@ -85,12 +79,43 @@ void CcLane::setScrollX (int x)
     repaint();
 }
 
-void CcLane::setCcNumber (int cc)
+void CcLane::setActiveCc (int cc)
 {
     cc = juce::jlimit (0, 127, cc);
-    if (cc == ccNumber_) return;
-    ccNumber_ = cc;
+    if (! activeIsParam_ && cc == ccNumber_) return;
+    activeIsParam_ = false;
+    activeParamId_ = {};
+    ccNumber_      = cc;
+    channel_       = 1;
     repaint();
+}
+
+bool CcLane::laneIsActive (const MidiCcLane& lane) const noexcept
+{
+    if (activeIsParam_)
+        return lane.isParam()
+            && lane.paramNodeId == activeParamNode_
+            && lane.paramId     == activeParamId_;
+    return ! lane.isParam()
+        && lane.ccNumber == ccNumber_
+        && lane.channel  == channel_;
+}
+
+MidiCcLane::PointList CcLane::activeLanePoints (const MidiNoteRegion& region) const
+{
+    if (const auto* snap = region.loadCcSnapshot())
+        for (const auto& lane : *snap)
+            if (laneIsActive (lane))
+                return lane.points;
+    return {};
+}
+
+void CcLane::writeActiveLane (MidiNoteRegion& region, MidiCcLane::PointList points)
+{
+    if (activeIsParam_)
+        region.setParamLane (activeParamNode_, activeParamId_, std::move (points));
+    else
+        region.setCcLane (ccNumber_, channel_, std::move (points));
 }
 
 void CcLane::resized() {}
@@ -113,9 +138,27 @@ CcLane::CcChipLayout CcLane::ccChipLayout() const
             int i = 0;
             for (const auto& lane : *snap)
             {
-                const int w = 44;   // "CC nnn"
-                out.chips.push_back ({ lane.ccNumber, lane.channel, i,
-                                       juce::Rectangle<int> (x, y, w, h) });
+                CcChip chip;
+                chip.laneIndex = i;
+                if (lane.isParam())
+                {
+                    chip.isParam = true;
+                    chip.nodeId  = lane.paramNodeId;
+                    chip.paramId = lane.paramId;
+                    chip.label   = laneIsActive (lane) && activeParamLabel_.isNotEmpty()
+                                       ? activeParamLabel_
+                                       : ("P" + lane.paramId);
+                }
+                else
+                {
+                    chip.cc      = lane.ccNumber;
+                    chip.channel = lane.channel;
+                    chip.label   = "CC " + juce::String (lane.ccNumber);
+                }
+                /* Param chips need more room for a name; CC chips stay compact. */
+                const int w = chip.isParam ? 64 : 44;
+                chip.rect = juce::Rectangle<int> (x, y, w, h);
+                out.chips.push_back (std::move (chip));
                 x += w + 3;
                 ++i;
             }
@@ -153,7 +196,7 @@ double CcLane::valueForY (int y) const noexcept
 int CcLane::findPointNear (const MidiNoteRegion& region, int x, int y,
                            int pxPerBeat) const noexcept
 {
-    const auto pts = copyLanePoints (region, ccNumber_, channel_);
+    const auto pts = activeLanePoints (region);
     int    best  = -1;
     double bestD = 1.0e9;
     for (size_t i = 0; i < pts.size(); ++i)
@@ -179,7 +222,7 @@ double segValueAt (const AutomationPoint& from, const AutomationPoint& to, doubl
 int CcLane::findMidpointNear (const MidiNoteRegion& region, int x, int y,
                               int pxPerBeat) const noexcept
 {
-    const auto pts = copyLanePoints (region, ccNumber_, channel_);
+    const auto pts = activeLanePoints (region);
     int    best  = -1;
     double bestD = 1.0e9;
     for (size_t i = 0; i + 1 < pts.size(); ++i)
@@ -213,7 +256,9 @@ void CcLane::paint (juce::Graphics& g)
     g.setFont (monoFont (9.0f, juce::Font::bold));
     for (const auto& chip : layout.chips)
     {
-        const bool active = (chip.cc == ccNumber_ && chip.channel == channel_);
+        const bool active = chip.isParam
+            ? (activeIsParam_ && chip.nodeId == activeParamNode_ && chip.paramId == activeParamId_)
+            : (! activeIsParam_ && chip.cc == ccNumber_ && chip.channel == channel_);
         const juce::Colour col = ccLaneColour (chip.laneIndex);
         g.setColour (active ? col
                             : col.withMultipliedBrightness (0.32f).withAlpha (0.85f));
@@ -222,7 +267,7 @@ void CcLane::paint (juce::Graphics& g)
         g.drawRect (chip.rect, 1);                 // no white active outline
         g.setColour (active ? col.contrasting (0.92f)
                             : col.brighter (0.3f).withAlpha (0.95f));
-        g.drawText ("CC " + juce::String (chip.cc),
+        g.drawText (chip.label,
                     chip.rect.reduced (3, 0), juce::Justification::centredLeft, true);
     }
     g.setColour (juce::Colour (0xff'2c'2c'32));
@@ -311,7 +356,7 @@ void CcLane::paint (juce::Graphics& g)
     {
         g.setColour (juce::Colours::white.withAlpha (0.25f));
         g.setFont (monoFont (10.0f, juce::Font::plain));
-        g.drawText ("click to add CC points (\"+\" picks a controller)",
+        g.drawText ("click to add points (\"+\" picks a CC or parameter)",
                     area, juce::Justification::centred);
         return;
     }
@@ -320,14 +365,14 @@ void CcLane::paint (juce::Graphics& g)
     int idx = 0;
     for (const auto& lane : *snap)
     {
-        if (! (lane.ccNumber == ccNumber_ && lane.channel == channel_))
+        if (! laneIsActive (lane))
             drawCurve (lane.points, ccLaneColour (idx), false);
         ++idx;
     }
     idx = 0;
     for (const auto& lane : *snap)
     {
-        if (lane.ccNumber == ccNumber_ && lane.channel == channel_)
+        if (laneIsActive (lane))
             drawCurve (lane.points, ccLaneColour (idx), true);
         ++idx;
     }
@@ -342,14 +387,25 @@ void CcLane::mouseDown (const juce::MouseEvent& e)
         const auto layout = ccChipLayout();
         if (layout.addRect.contains (e.x, e.y))
         {
-            showSelectorMenu (e.getScreenPosition());
+            showAddTargetMenu (e.getScreenPosition());
             return;
         }
         for (const auto& chip : layout.chips)
             if (chip.rect.contains (e.x, e.y))
             {
-                ccNumber_ = chip.cc;
-                channel_  = chip.channel;
+                if (chip.isParam)
+                {
+                    activeIsParam_   = true;
+                    activeParamNode_ = chip.nodeId;
+                    activeParamId_   = chip.paramId;
+                    activeParamLabel_ = chip.label;
+                }
+                else
+                {
+                    activeIsParam_ = false;
+                    ccNumber_      = chip.cc;
+                    channel_       = chip.channel;
+                }
                 repaint();
                 return;
             }
@@ -396,7 +452,7 @@ void CcLane::mouseDown (const juce::MouseEvent& e)
 
     /* Empty area -> add a breakpoint at the snapped beat + clicked value,
      * then drag it. */
-    auto pts = copyLanePoints (*region, ccNumber_, channel_);
+    auto pts = activeLanePoints (*region);
     const double rawBeat = grid->snapBeat (beatForX (e.x, pxPerBeat));
     const double local   = juce::jlimit (0.0, region->lengthBeats, rawBeat);
     AutomationPoint np;
@@ -406,7 +462,7 @@ void CcLane::mouseDown (const juce::MouseEvent& e)
     while (insertIdx < pts.size() && pts[insertIdx].tBeats < local)
         ++insertIdx;
     pts.insert (pts.begin() + (long) insertIdx, np);
-    region->setCcLane (ccNumber_, channel_, pts);
+    writeActiveLane (*region, pts);
 
     drag_.mode       = DragMode::MovePoint;
     drag_.pointIndex = (int) insertIdx;
@@ -424,7 +480,7 @@ void CcLane::mouseDrag (const juce::MouseEvent& e)
     const int pxPerBeat = grid->getPxPerBeat();
     if (pxPerBeat <= 0) return;
 
-    auto pts = copyLanePoints (*region, ccNumber_, channel_);
+    auto pts = activeLanePoints (*region);
 
     if (drag_.mode == DragMode::MovePoint)
     {
@@ -460,7 +516,7 @@ void CcLane::mouseDrag (const juce::MouseEvent& e)
         pts[(size_t) i].curve.offsetV = valueForY (e.y) - chordMid;
     }
 
-    region->setCcLane (ccNumber_, channel_, pts);
+    writeActiveLane (*region, pts);
     drag_.moved = true;
     repaint();
 }
@@ -474,19 +530,86 @@ void CcLane::mouseUp (const juce::MouseEvent&)
     repaint();
 }
 
-void CcLane::showSelectorMenu (juce::Point<int> screenPos)
+void CcLane::showAddTargetMenu (juce::Point<int> screenPos)
 {
+    /* The "+" picker offers BOTH target kinds (#11 full symmetry): a "MIDI
+     * CC" submenu of common controllers, plus every automatable node/plugin
+     * parameter in the active graph (grouped per node), so a clip-local lane
+     * can drive a synth/FX param OR a CC to outboard gear.
+     *
+     * Result-id scheme: 1..128 = CC (cc+1); 1000+ = a graph param, indexed
+     * into paramTargets below. */
     juce::PopupMenu menu;
+
+    juce::PopupMenu ccMenu;
     for (const auto& c : kCommonCcs)
-        menu.addItem (c.cc + 1, "CC " + juce::String (c.cc) + "  " + c.name,
-                      true, c.cc == ccNumber_);
+        ccMenu.addItem (c.cc + 1, "CC " + juce::String (c.cc) + "  " + c.name,
+                        true, ! activeIsParam_ && c.cc == ccNumber_);
+    menu.addSubMenu ("MIDI CC", ccMenu);
+
+    /* Enumerate every automatable param in the active graph, grouped per
+     * node -- mirrors ArrangementView::collectAutomatableTargets. */
+    struct ParamTarget { juce::Uuid nodeId; juce::String paramId, label; };
+    std::vector<ParamTarget> paramTargets;
+
+    if (services_.context().session() != nullptr)
+    {
+        const Node root = services_.context().session()->getActiveGraph();
+        std::function<void (const Node&)> walk = [&] (const Node& parent)
+        {
+            for (int i = 0; i < parent.getNumNodes(); ++i)
+            {
+                Node child = parent.getNode (i);
+                if (! child.isValid()) continue;
+                if (auto* proc = child.getObject())
+                {
+                    const auto params =
+                        automation::enumerateAutomatableParams (proc->getParameters (true));
+                    if (! params.empty())
+                    {
+                        juce::PopupMenu nodeMenu;
+                        const juce::String nodeName = child.getDisplayName();
+                        for (const auto& ap : params)
+                        {
+                            const int id = 1000 + (int) paramTargets.size();
+                            const juce::String pid = automation::encodeNodeParamId (ap.index);
+                            const bool on = activeIsParam_
+                                         && child.getUuid() == activeParamNode_
+                                         && pid == activeParamId_;
+                            nodeMenu.addItem (id, ap.name, true, on);
+                            paramTargets.push_back ({ child.getUuid(), pid,
+                                                      nodeName + ": " + ap.name });
+                        }
+                        menu.addSubMenu (nodeName, nodeMenu);
+                    }
+                }
+                if (child.isGraph())
+                    walk (child);
+            }
+        };
+        walk (root);
+    }
 
     /* Synchronous showAt at the cursor -- the proven pattern in this build
      * (SessionView's context menus).  showMenuAsync mis-rendered detached
      * at the window bottom + keyboard-only under this windowing setup. */
     const int result = menu.showAt (juce::Rectangle<int> (screenPos.x, screenPos.y, 1, 1));
-    if (result > 0)
-        setCcNumber (result - 1);
+    if (result <= 0) return;
+
+    if (result >= 1000)
+    {
+        const size_t idx = (size_t) (result - 1000);
+        if (idx >= paramTargets.size()) return;
+        activeIsParam_    = true;
+        activeParamNode_  = paramTargets[idx].nodeId;
+        activeParamId_    = paramTargets[idx].paramId;
+        activeParamLabel_ = paramTargets[idx].label;
+        repaint();
+    }
+    else
+    {
+        setActiveCc (result - 1);
+    }
 }
 
 void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
@@ -502,7 +625,7 @@ void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
 
     auto* region = resolveBoundRegion();
     if (region == nullptr) return;
-    auto pts = copyLanePoints (*region, ccNumber_, channel_);
+    auto pts = activeLanePoints (*region);
     if (pointIndex < 0 || pointIndex >= (int) pts.size()) return;
 
     if (result == 1)
@@ -515,7 +638,7 @@ void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
         pts[(size_t) pointIndex].curve.offsetV = 0.0;
     }
 
-    region->setCcLane (ccNumber_, channel_, pts);
+    writeActiveLane (*region, pts);
     parent_.notifyRegionEdited();
     repaint();
 }

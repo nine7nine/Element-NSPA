@@ -7919,14 +7919,6 @@ void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
     std::vector<AutoParamTarget> targets;
     collectAutomatableTargets (sess->getActiveGraph(), targets);
 
-    if (targets.empty())
-    {
-        juce::PopupMenu m;
-        m.addItem (1, "No automatable parameters in the graph", false, false);
-        m.showAt (screenAnchor);
-        return;
-    }
-
     /* Pre-compute which targets are already bound on THIS lane so the menu
      * can tick them (avoids silently double-adding the same destination). */
     auto isBoundOnLane = [this, laneId] (const dsp::automation::AutomationTargetKey& key)
@@ -7940,9 +7932,22 @@ void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
         return false;
     };
 
-    /* Menu item id == flat target index + 1.  Walk the (node-grouped) list,
-     * opening a fresh submenu each time the node id changes. */
+    /* Menu id scheme (full symmetry with the piano-roll #11): 1..N = a
+     * graph param (index into `targets`); kCcIdBase + cc = a MIDI CC.  The
+     * engine already drives BOTH kinds (AutomationTargetKey.isMidi()); a CC
+     * track emits a controllerEvent into the graph MIDI buffer, channel-
+     * routed to whatever consumes it (e.g. outboard gear / a synth on that
+     * channel) -- same path the live MappingEngine uses. */
+    constexpr int kCcIdBase = 100000;
+    static const struct { int cc; const char* name; } kCommonCcs[] = {
+        {  1, "Mod Wheel" }, {  2, "Breath" }, {  7, "Volume" }, { 10, "Pan" },
+        { 11, "Expression" }, { 64, "Sustain" }, { 71, "Resonance" },
+        { 74, "Cutoff" }, { 91, "Reverb" }, { 93, "Chorus" },
+    };
+
     juce::PopupMenu menu;
+
+    /* Params first, grouped per node. */
     size_t i = 0;
     while (i < targets.size())
     {
@@ -7963,21 +7968,35 @@ void ArrangementView::showAddAutomationMenuForLane (int laneIdx,
         menu.addSubMenu (nodeName, sub);
     }
 
+    /* MIDI CC submenu (channel 1). */
+    juce::PopupMenu ccMenu;
+    for (const auto& c : kCommonCcs)
+        ccMenu.addItem (kCcIdBase + c.cc,
+                        "CC " + juce::String (c.cc) + "  " + juce::String (c.name),
+                        true, isBoundOnLane (automation::makeMidiCcKey (1, c.cc)));
+    menu.addSubMenu ("MIDI CC", ccMenu);
+
     /* Synchronous showAt -- the reliable pattern in this build (mouse
      * works, positions at the anchor).  withTargetScreenArea + async
      * mis-rendered detached at the window bottom under this windowing. */
     const int result = menu.showAt (screenAnchor);
-    if (result <= 0 || result > (int) targets.size()) return;
-    const auto& t = targets[(size_t) (result - 1)];
-    /* Confirm the lane still exists; ownerLaneId is presentation only,
-     * the target node is graph-wide. */
+    if (result <= 0) return;
+
+    /* Confirm the lane still exists; ownerLaneId is presentation only. */
+    bool laneStillThere = false;
     for (const auto& l : lanes_)
-        if (l.id == laneId)
-        {
-            addAutomationLane (
-                automation::makeNodeParamKey (t.nodeId, t.paramIndex), laneId);
-            break;
-        }
+        if (l.id == laneId) { laneStillThere = true; break; }
+    if (! laneStillThere) return;
+
+    if (result >= kCcIdBase)
+    {
+        addAutomationLane (automation::makeMidiCcKey (1, result - kCcIdBase), laneId);
+    }
+    else if (result <= (int) targets.size())
+    {
+        const auto& t = targets[(size_t) (result - 1)];
+        addAutomationLane (automation::makeNodeParamKey (t.nodeId, t.paramIndex), laneId);
+    }
 }
 
 void ArrangementView::writeMarkersToSessionTree (juce::ValueTree& arrTree)
@@ -8691,6 +8710,36 @@ juce::Uuid ArrangementView::createEmptyMidiRegion (int    laneIdx,
     return newId;
 }
 
+namespace {
+/* Resolve a clip-local param lane's (nodeId, paramId) to a live
+ * AutomationTarget (NodeParam kind, holding the ParameterPtr by value so
+ * it survives transient graph rebuilds).  Mirrors
+ * automation::rebindEngineTargets.  Returns false (target stays Invalid)
+ * when the node/param can't be resolved -- the audio thread then simply
+ * finds no binding and skips applying that lane. */
+bool buildClipParamBinding (const Node& graph,
+                            const juce::Uuid& nodeId, const juce::String& paramId,
+                            MidiPlayerNode::ParamBinding& out)
+{
+    const int idx = automation::decodeNodeParamId (paramId);
+    if (idx < 0) return false;
+    const Node node = findNodeByUuid (graph, nodeId);
+    if (! node.isValid()) return false;
+    auto* proc = node.getObject();
+    if (proc == nullptr) return false;
+    const auto& params = proc->getParameters (true);
+    if (idx >= params.size()) return false;
+    auto p = params.getUnchecked (idx);
+    if (p == nullptr) return false;
+
+    out.nodeId        = nodeId;
+    out.paramId       = paramId;
+    out.target.kind   = automation::AutomationTarget::Kind::NodeParam;
+    out.target.nodeParam = p;
+    return true;
+}
+} // namespace
+
 void ArrangementView::publishMidiBindingsForLane (int laneIdx)
 {
     if (laneIdx < 0 || laneIdx >= lanes_.size()) return;
@@ -8702,6 +8751,19 @@ void ArrangementView::publishMidiBindingsForLane (int laneIdx)
     const auto& lane = lanes_.getReference (laneIdx);
     std::vector<MidiPlayerNode::RegionEntry> entries;
     entries.reserve (lane.playlist.midiRegions().size());
+
+    /* Param-lane bindings published alongside the region table: walk every
+     * region's clip-local param lanes, resolve each target against the live
+     * graph, and hand the player node a fresh binding table (#11 Phase 2c).
+     * CC lanes need no binding -- the node reads their points live from the
+     * region snapshot + emits MIDI; only param lanes need a resolved
+     * destination. */
+    std::vector<MidiPlayerNode::ParamBinding> paramBindings;
+    Node graph;
+    if (services_ != nullptr)
+        if (auto sess = services_->context().session())
+            graph = sess->getActiveGraph();
+
     for (const auto& mp : lane.playlist.midiRegions())
     {
         if (mp == nullptr) continue;
@@ -8713,8 +8775,30 @@ void ArrangementView::publishMidiBindingsForLane (int laneIdx)
         e.looped        = mp->looped;
         e.loopLengthBeats = mp->loopLengthBeats;
         entries.push_back (e);
+
+        if (graph.isValid())
+            if (const auto* cc = mp->loadCcSnapshot())
+                for (const auto& cl : *cc)
+                {
+                    if (! cl.isParam()) continue;
+                    MidiPlayerNode::ParamBinding b;
+                    if (buildClipParamBinding (graph, cl.paramNodeId, cl.paramId, b))
+                        paramBindings.push_back (std::move (b));
+                }
     }
     runtime.midiPlayerCache->setBoundRegions (std::move (entries));
+    runtime.midiPlayerCache->setBoundParams  (std::move (paramBindings));
+}
+
+void ArrangementView::republishMidiBindingsForRegion (const juce::Uuid& regionId)
+{
+    if (regionId.isNull()) return;
+    for (int i = 0; i < lanes_.size(); ++i)
+        if (lanes_.getReference (i).playlist.findMidiRegion (regionId) != nullptr)
+        {
+            publishMidiBindingsForLane (i);
+            return;
+        }
 }
 
 int ArrangementView::laneIdxFromY (int yPx) const noexcept

@@ -135,6 +135,12 @@ public:
      *  midiRegions and atomic-swaps it into the player node. */
     void publishMidiBindingsForLane (int laneIdx);
 
+    /** Locate the lane owning `regionId` and republish its MidiPlayerNode
+     *  bindings (regions + clip-local param targets).  Called when a
+     *  piano-roll edit may have added / removed / retargeted a param lane
+     *  so the player node's param-binding table tracks the change. */
+    void republishMidiBindingsForRegion (const juce::Uuid& regionId);
+
     /** Create a timeline automation lane targeting `key`, optionally
      *  nested as an overlay under the lane `ownerLaneId` (null = a
      *  standalone/dedicated automation lane).  Allocates a song-owned

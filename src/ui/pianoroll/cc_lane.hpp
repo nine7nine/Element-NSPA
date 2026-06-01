@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "services/timeline/midi_cc_lane.hpp"
+
 #include <element/juce/gui_basics.hpp>
 #include <element/services.hpp>
 
@@ -50,11 +52,8 @@ public:
      *  viewport, identical to VelocityLane::setScrollX). */
     void setScrollX (int x);
 
-    /** Currently-edited controller.  Channel fixed at 1 for v1 (matches
-     *  the common single-channel piano-roll clip); the selector changes
-     *  the CC number. */
-    int  getCcNumber() const noexcept { return ccNumber_; }
-    void setCcNumber (int cc);
+    /** Make a MIDI CC the active/editable lane (channel fixed at 1). */
+    void setActiveCc (int cc);
 
     static constexpr int kDefaultHeight = 84;
 
@@ -65,8 +64,17 @@ private:
     Services&      services_;
 
     int scrollX_  { 0 };
-    int ccNumber_ { 1 };   // mod wheel
-    int channel_  { 1 };
+
+    /* Active (editable) lane identity -- a CC controller OR a clip-local
+     * node-parameter target (#11 unification).  All editing/paint reads
+     * resolve the active lane through laneIsActive(); mutation routes to
+     * setCcLane / setParamLane accordingly. */
+    bool         activeIsParam_ { false };
+    int          ccNumber_ { 1 };   // mod wheel (CC mode)
+    int          channel_  { 1 };
+    juce::Uuid   activeParamNode_;  // param mode
+    juce::String activeParamId_;
+    juce::String activeParamLabel_; // display text for the param chip
 
     /* In-flight drag.  Two modes:
      *   MovePoint  -- drag a breakpoint (pointIndex), x clamped between
@@ -97,9 +105,33 @@ private:
      * chip makes that (cc, channel) the active/editable lane; all lanes
      * render superimposed in the curve area, the active one bright with
      * handles, the rest dim ghosts. */
-    struct CcChip { int cc; int channel; int laneIndex; juce::Rectangle<int> rect; };
+    struct CcChip
+    {
+        bool         isParam { false };
+        int          cc { 1 };
+        int          channel { 1 };
+        juce::Uuid   nodeId;
+        juce::String paramId;
+        juce::String label;     // chip text ("CC 11" / param name)
+        int          laneIndex { 0 };
+        juce::Rectangle<int> rect;
+    };
     struct CcChipLayout { std::vector<CcChip> chips; juce::Rectangle<int> addRect; };
     CcChipLayout ccChipLayout() const;
+
+    /** True when `lane` is the active/editable lane (param or CC). */
+    bool laneIsActive (const MidiCcLane& lane) const noexcept;
+
+    /** Copy the active lane's points from the region snapshot (empty if
+     *  the active lane doesn't exist yet). */
+    MidiCcLane::PointList activeLanePoints (const MidiNoteRegion& region) const;
+
+    /** Upsert the active lane's points (routes to setParamLane /
+     *  setCcLane by the active target kind). */
+    void writeActiveLane (MidiNoteRegion& region, MidiCcLane::PointList points);
+
+    /** Build the "+" picker: common CCs + every automatable graph param. */
+    void showAddTargetMenu (juce::Point<int> screenPos);
 
     int    xForBeat   (double localBeat, int pxPerBeat) const noexcept;
     double beatForX   (int x, int pxPerBeat) const noexcept;
@@ -118,7 +150,6 @@ private:
     int findMidpointNear (const MidiNoteRegion& region, int x, int y,
                           int pxPerBeat) const noexcept;
 
-    void showSelectorMenu (juce::Point<int> screenPos);
     void showPointMenu (int pointIndex, juce::Point<int> screenPos);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CcLane)

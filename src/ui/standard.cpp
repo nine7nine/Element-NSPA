@@ -1910,6 +1910,12 @@ void StandardContent::showPianoRollForRegion (const juce::Uuid& regionId)
             if (auto* arr = dynamic_cast<ArrangementView*> (itArr->second.get()))
             {
                 arr->flushLanesToSession();
+                /* A piano-roll edit may have added / removed / retargeted a
+                 * clip-local param-automation lane -- refresh the owning
+                 * MidiPlayerNode's param-binding table so the new target
+                 * resolves (#11 Phase 2c).  Cheap: no-op unless the bound
+                 * region lives in an arrangement lane. */
+                arr->republishMidiBindingsForRegion (pianoRoll->getBoundRegionId());
                 arr->repaint();
             }
         }
