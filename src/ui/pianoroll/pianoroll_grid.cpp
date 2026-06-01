@@ -64,13 +64,15 @@ PianoRollGrid::PianoRollGrid (PianoRollView& parent, Services& services)
     if (auto* eng = services.context().audio().get())
         monitor_ = eng->getTransportMonitor();
 
-    startTimerHz (30);
+    /* Drive the playhead off the peer's vertical-blank tick (display
+     * refresh rate, vsync-cadenced during playback) rather than an
+     * independent timer -- the update runs in the same tick that flushes
+     * deferred repaints, so there's no phase beating against the peer's
+     * vblank (which read as judder). */
+    vblank_ = juce::VBlankAttachment (this, [this] { vblankTick(); });
 }
 
-PianoRollGrid::~PianoRollGrid()
-{
-    stopTimer();
-}
+PianoRollGrid::~PianoRollGrid() = default;
 
 //==============================================================================
 // Bound-region helpers.
@@ -145,7 +147,7 @@ void PianoRollGrid::resized()
     /* No child layout -- the grid paints directly into its bounds. */
 }
 
-void PianoRollGrid::timerCallback()
+void PianoRollGrid::vblankTick()
 {
     if (! isShowing()) return;
 

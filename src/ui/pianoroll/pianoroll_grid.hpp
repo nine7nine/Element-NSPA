@@ -65,12 +65,14 @@ struct MidiNote;
  *
  *  ## Repaint
  *
- *  30 Hz juce::Timer gated on isShowing() drives repaint when
- *  external mutations (e.g. transport playhead, future MIDI live-
- *  record) change the note set.  User-driven edits trigger
- *  immediate repaint via boundRegionChanged / commit paths. */
-class PianoRollGrid : public juce::Component,
-                      private juce::Timer
+ *  A juce::VBlankAttachment drives the surgical playhead update on the
+ *  display's vertical-blank tick (read from the wayland output's refresh
+ *  rate).  This is the peer's OWN vblank source -- the playhead update
+ *  runs in the same tick that flushes deferred repaints, so it's phase-
+ *  aligned to the compositor refresh (no beating between an independent
+ *  timer and the peer's vblank, which read as judder).  User-driven edits
+ *  trigger immediate repaint via boundRegionChanged / commit paths. */
+class PianoRollGrid : public juce::Component
 {
 public:
     PianoRollGrid (PianoRollView& parent, Services& services);
@@ -293,7 +295,10 @@ private:
      * dialog close. */
     std::unordered_set<std::uint64_t> previewAffectedIds_;
 
-    void timerCallback() override;
+    /** Per-vblank tick: surgically advances the grid + controller-lane
+     *  playheads (driven by vblank_). */
+    void vblankTick();
+    juce::VBlankAttachment vblank_;
 
     void paintEmptyState    (juce::Graphics&);
     void paintBarGrid       (juce::Graphics&, int beatsPerBar);
