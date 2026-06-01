@@ -6,6 +6,7 @@
 #include <element/midipipe.hpp>
 #include <element/node.h>
 #include "nodes/midifilter.hpp"
+#include "services/automation/automation_target.hpp"
 #include "services/timeline/midi_note_region.hpp"
 
 #include <array>
@@ -157,6 +158,37 @@ public:
     void sweepBindingsTrash() noexcept;
 
     //==========================================================================
+    // Clip-local PARAM automation binding (#11 Phase 2b).
+    //
+    // A MidiCcLane can target a node/plugin parameter instead of a MIDI CC
+    // (MidiCcLane::isParam()).  CC lanes ride the MIDI output; param lanes
+    // are APPLIED to a live parameter while the region plays.  The audio
+    // thread can't reach into the graph, so the message thread (view layer,
+    // which has graph access) resolves each param lane's (nodeId, paramId)
+    // to a live AutomationTarget and publishes a binding table here -- same
+    // lock-free swap + epoch-trash discipline as setBoundRegions.
+    //
+    // Application is COARSE: one setValue per block at the block-start local
+    // beat, mirroring AutomationEngine's param path (a 7-bit-ish smooth
+    // controller doesn't need sub-block param writes, and setValue-per-
+    // stride on a hosted plugin is needless audio-thread work).
+
+    struct ParamBinding
+    {
+        /** Identity that matches a region's MidiCcLane param target. */
+        juce::Uuid                   nodeId;
+        juce::String                 paramId;
+        /** Resolved live destination (kind NodeParam / PluginParam).  Holds
+         *  the Parameter alive against transient graph rebuilds (ParameterPtr
+         *  by value), exactly like AutomationTrack::liveTarget. */
+        automation::AutomationTarget target;
+    };
+
+    /** Replace the active param-binding table.  Message thread only.  Prior
+     *  table discarded after a one-block grace period (audioEpoch_ trash). */
+    void setBoundParams (std::vector<ParamBinding> bindings);
+
+    //==========================================================================
     // Session-view API.  Parallel to TrackerNode's session-view API.
     // Each SessionClipSlot carries one MidiNoteRegion + per-clip
     // launch state machine + per-clip held-notes bitset.  Audio thread
@@ -277,6 +309,18 @@ private:
     std::deque<EntryTrash>          entriesTrash_;
     std::atomic<std::uint64_t>      audioEpoch_ { 0 };
 
+    /** Active param-binding table (atomic pointer).  Non-null after ctor
+     *  publishes an empty table.  Same epoch-trash discipline as
+     *  activeEntries_ -- swept via sweepBindingsTrash(). */
+    using ParamList = std::vector<ParamBinding>;
+    std::atomic<const ParamList*> activeParams_ { nullptr };
+    struct ParamTrash
+    {
+        std::unique_ptr<const ParamList> bindings;
+        std::uint64_t                    stampEpoch;
+    };
+    std::deque<ParamTrash>          paramsTrash_;
+
     /** Bitset of currently-held (channel, pitch) pairs -- one bit per
      *  pair.  16 channels x 128 pitches = 2048 bits = 256 bytes.
      *  Audio-thread-owned; never touched by message thread. */
@@ -322,6 +366,24 @@ private:
                               double             samplesPerBeat,
                               int                numSamples,
                               juce::MidiBuffer&  out) noexcept;
+
+    /** Apply the region's clip-local PARAM lanes for this block (coarse:
+     *  one setValue at the block-start local beat).  For each isParam()
+     *  lane in the region's snapshot, find the matching published
+     *  ParamBinding and writeCoarseValue the sampled curve value.  No CC
+     *  is emitted for these lanes.  Lock-free + alloc-free.  (ParamList /
+     *  SessionClipSlot are defined further down -- the session-clip
+     *  counterpart applyClipParamsInBlock is declared after them.) */
+    void applyRegionParamsInBlock (const RegionEntry& entry,
+                                   double             blockStartBeat,
+                                   const ParamList*   params) noexcept;
+
+    /** Find the published binding for a lane's (nodeId, paramId), or
+     *  nullptr.  Linear scan -- binding counts are small (a handful per
+     *  clip).  Audio-thread safe (reads immutable published strings). */
+    static const ParamBinding* findParamBinding (const ParamList* params,
+                                                 const juce::Uuid& nodeId,
+                                                 const juce::String& paramId) noexcept;
 
     /** Sub-block CC sampling stride.  64 samples == ~1.3 ms at 48 kHz,
      *  matching AutomationEngine::kAutomationSubBlockStride.  CC is an
@@ -472,6 +534,13 @@ private:
                                     double             samplesPerBeat,
                                     int                numSamples,
                                     juce::MidiBuffer&  out) noexcept;
+
+    /** Session-clip counterpart of applyRegionParamsInBlock: samples the
+     *  clip's param lanes at the slot's current localBeatPos (clip-local,
+     *  srcOffset 0).  Coarse per block.  Must run BEFORE
+     *  emitSessionClipInBlock advances localBeatPos. */
+    void applyClipParamsInBlock (SessionClipSlot& slot,
+                                 const ParamList* params) noexcept;
 
     /** Audio-thread helper: emit NoteOff for every held bit on `slot`
      *  at the supplied sample offset.  Clears the slot's held bitset. */

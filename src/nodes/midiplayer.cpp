@@ -13,14 +13,17 @@ MidiPlayerNode::MidiPlayerNode()
 {
     setName ("MIDI Player");
 
-    /* Publish an empty entry table up front so the audio thread
-     * never observes a null pointer. */
+    /* Publish empty tables up front so the audio thread never observes
+     * a null pointer. */
     activeEntries_.store (new EntryList(), std::memory_order_release);
+    activeParams_.store (new ParamList(),  std::memory_order_release);
 }
 
 MidiPlayerNode::~MidiPlayerNode()
 {
     if (auto* live = activeEntries_.exchange (nullptr, std::memory_order_acq_rel))
+        delete live;
+    if (auto* live = activeParams_.exchange (nullptr, std::memory_order_acq_rel))
         delete live;
 }
 
@@ -167,12 +170,26 @@ void MidiPlayerNode::setBoundRegions (std::vector<RegionEntry> entries)
             std::unique_ptr<const EntryList> (old), stamp });
 }
 
+void MidiPlayerNode::setBoundParams (std::vector<ParamBinding> bindings)
+{
+    auto next = std::make_unique<ParamList> (std::move (bindings));
+    const ParamList* raw   = next.release();
+    const auto       stamp = audioEpoch_.load (std::memory_order_acquire);
+    const ParamList* old   = activeParams_.exchange (raw, std::memory_order_acq_rel);
+    if (old != nullptr)
+        paramsTrash_.push_back (ParamTrash {
+            std::unique_ptr<const ParamList> (old), stamp });
+}
+
 void MidiPlayerNode::sweepBindingsTrash() noexcept
 {
     const auto safeEpoch = audioEpoch_.load (std::memory_order_acquire);
     while (! entriesTrash_.empty()
            && entriesTrash_.front().stampEpoch < safeEpoch)
         entriesTrash_.pop_front();
+    while (! paramsTrash_.empty()
+           && paramsTrash_.front().stampEpoch < safeEpoch)
+        paramsTrash_.pop_front();
 }
 
 //==============================================================================
@@ -666,6 +683,7 @@ void MidiPlayerNode::render (RenderContext& rc)
 
     /* -------- Arrangement-side region emission -------- */
     const EntryList* entries = activeEntries_.load (std::memory_order_acquire);
+    const ParamList* params  = activeParams_.load (std::memory_order_acquire);
     if (entries != nullptr)
     {
         for (const auto& entry : *entries)
@@ -682,6 +700,7 @@ void MidiPlayerNode::render (RenderContext& rc)
                                    samplesPerBeat, nsamples, *out);
                 emitRegionCcInBlock (entry, blockStartBeat, samplesPerBeat,
                                      nsamples, *out);
+                applyRegionParamsInBlock (entry, blockStartBeat, params);
                 continue;
             }
 
@@ -693,6 +712,7 @@ void MidiPlayerNode::render (RenderContext& rc)
                                samplesPerBeat, nsamples, *out);
             emitRegionCcInBlock (entry, blockStartBeat, samplesPerBeat,
                                  nsamples, *out);
+            applyRegionParamsInBlock (entry, blockStartBeat, params);
         }
     }
 
@@ -708,10 +728,11 @@ void MidiPlayerNode::render (RenderContext& rc)
         auto* slot = sessionClips_.getUnchecked (i);
         if (! slot->alive.load (std::memory_order_acquire)) continue;
         if (slot->state.load (std::memory_order_acquire) != kPlaying) continue;
-        /* CC first -- it reads localBeatPos as the block-start position,
-         * which emitSessionClipInBlock then advances. */
+        /* CC + param first -- both read localBeatPos as the block-start
+         * position, which emitSessionClipInBlock then advances. */
         emitSessionClipCcInBlock (*slot, blockBeats, samplesPerBeat,
                                   nsamples, *out);
+        applyClipParamsInBlock (*slot, params);
         emitSessionClipInBlock (*slot, blockBeats, samplesPerBeat,
                                 nsamples, *out);
     }
@@ -971,6 +992,73 @@ void MidiPlayerNode::emitRegionCcInBlock (const RegionEntry& entry,
                 lastCcValue_[(size_t) idx] = (std::int8_t) v;
             }
         }
+    }
+}
+
+const MidiPlayerNode::ParamBinding* MidiPlayerNode::findParamBinding (
+    const ParamList* params, const juce::Uuid& nodeId,
+    const juce::String& paramId) noexcept
+{
+    if (params == nullptr) return nullptr;
+    for (const auto& b : *params)
+        if (b.nodeId == nodeId && b.paramId == paramId)
+            return &b;
+    return nullptr;
+}
+
+void MidiPlayerNode::applyRegionParamsInBlock (const RegionEntry& entry,
+                                               double             blockStartBeat,
+                                               const ParamList*   params) noexcept
+{
+    if (params == nullptr || params->empty()) return;
+    const auto* cc = entry.region->loadCcSnapshot();
+    if (cc == nullptr || cc->empty()) return;
+
+    /* Map the block-start transport beat to the region's source-local
+     * beat (loop modulo + left-trim offset) -- identical to the first
+     * stride of emitRegionCcInBlock.  Coarse: one sample per block. */
+    const double regionLen  = entry.lengthBeats;
+    const double loopPeriod = (entry.looped && entry.loopLengthBeats > 0.0)
+                                  ? entry.loopLengthBeats
+                                  : regionLen;
+    double lb = blockStartBeat - entry.positionBeats;
+    if (entry.looped)
+    {
+        if (loopPeriod <= 0.0) return;
+        lb = std::fmod (lb, loopPeriod);
+        if (lb < 0.0) lb += loopPeriod;
+    }
+    else if (lb < 0.0 || lb >= regionLen)
+    {
+        return;   // block start outside the (non-looped) region
+    }
+    const double srcLocal = entry.startBeats + lb;
+
+    for (const auto& lane : *cc)
+    {
+        if (! lane.isParam()) continue;
+        if (const auto* b = findParamBinding (params, lane.paramNodeId, lane.paramId))
+            b->target.writeCoarseValue ((float) lane.valueAtBeats (srcLocal));
+    }
+}
+
+void MidiPlayerNode::applyClipParamsInBlock (SessionClipSlot& slot,
+                                             const ParamList* params) noexcept
+{
+    if (params == nullptr || params->empty() || slot.region == nullptr) return;
+    const auto* cc = slot.region->loadCcSnapshot();
+    if (cc == nullptr || cc->empty()) return;
+    const double clipLen = slot.region->lengthBeats;
+    if (clipLen <= 0.0) return;
+
+    double lb = std::fmod (slot.localBeatPos.load (std::memory_order_relaxed), clipLen);
+    if (lb < 0.0) lb += clipLen;
+
+    for (const auto& lane : *cc)
+    {
+        if (! lane.isParam()) continue;
+        if (const auto* b = findParamBinding (params, lane.paramNodeId, lane.paramId))
+            b->target.writeCoarseValue ((float) lane.valueAtBeats (lb));
     }
 }
 
