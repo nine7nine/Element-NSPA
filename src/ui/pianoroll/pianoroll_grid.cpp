@@ -144,6 +144,13 @@ void PianoRollGrid::timerCallback()
 {
     if (! isShowing()) return;
     repaint();
+    /* Drive the controller lanes' playhead while transport rolls (and one
+     * extra frame on the stop edge so their playhead clears) so live
+     * playback tracks across the whole editor, not just the grid. */
+    const bool playing = monitor_ != nullptr && monitor_->playing.get();
+    if (playing || playing != lastTimerPlaying_)
+        parent_.repaintControllerLanes();
+    lastTimerPlaying_ = playing;
 }
 
 //==============================================================================
@@ -602,20 +609,22 @@ void PianoRollGrid::paintRuler (juce::Graphics& g, int beatsPerBar)
     }
 }
 
+double PianoRollGrid::playheadLocalBeat() const noexcept
+{
+    if (monitor_ == nullptr || ! monitor_->playing.get()) return -1.0;
+    auto* region = const_cast<PianoRollGrid*> (this)->resolveBoundRegion();
+    if (region == nullptr) return -1.0;
+    const double localBeat = (double) monitor_->getPositionBeats() - region->positionBeats;
+    if (localBeat < 0.0 || localBeat > regionLenBeats_) return -1.0;
+    return localBeat;
+}
+
 void PianoRollGrid::paintPlayhead (juce::Graphics& g)
 {
-    if (monitor_ == nullptr) return;
     /* Only paint when transport is actually rolling -- a parked
      * playhead inside the region's middle is visual noise. */
-    if (! monitor_->playing.get()) return;
-
-    /* Region-local beat = transport beat - region.positionBeats. */
-    auto* region = resolveBoundRegion();
-    if (region == nullptr) return;
-
-    const double transportBeat = (double) monitor_->getPositionBeats();
-    const double localBeat = transportBeat - region->positionBeats;
-    if (localBeat < 0.0 || localBeat > regionLenBeats_) return;
+    const double localBeat = playheadLocalBeat();
+    if (localBeat < 0.0) return;
 
     const int x = (int) std::round (localBeat * pxPerBeat_);
     g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));

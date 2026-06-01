@@ -110,6 +110,12 @@ public:
     int  getPxPerBeat() const noexcept { return pxPerBeat_; }
     void setPxPerBeat (int newPxPerBeat);
 
+    /** Region-local beat of the transport playhead, or -1 when transport
+     *  is stopped / no region / the playhead is outside the region span.
+     *  Lets sibling lanes (velocity / CC) draw the same playhead so live
+     *  playback tracks across the whole editor, not just the grid. */
+    double playheadLocalBeat() const noexcept;
+
     static constexpr int kPxPerBeatMin = 4;
     static constexpr int kPxPerBeatMax = 256;
 
@@ -248,6 +254,11 @@ private:
     PianoRollView&  parent_;
     Services&       services_;
     Transport::MonitorPtr monitor_;
+
+    /* Tracks the transport play state across timer ticks so the controller
+     * lanes get one final repaint on the play->stop edge (clears their
+     * playhead) without repainting them every tick while stopped. */
+    bool            lastTimerPlaying_ { false };
 
     int             pxPerBeat_   { 64 };
     /* Cached region length from the last bind / region edit; used

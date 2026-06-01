@@ -559,6 +559,14 @@ void PianoRollView::notifyRegionEdited()
         ccLane_->repaint();
 }
 
+void PianoRollView::repaintControllerLanes()
+{
+    if (velocityLane_ != nullptr && velocityLane_->isVisible())
+        velocityLane_->repaint();
+    if (ccLane_ != nullptr && ccLane_->isVisible())
+        ccLane_->repaint();
+}
+
 void PianoRollView::setRegion (const juce::Uuid& regionId)
 {
     if (regionId == boundRegionId_) return;

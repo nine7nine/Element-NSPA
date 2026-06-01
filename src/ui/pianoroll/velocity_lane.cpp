@@ -139,6 +139,20 @@ void VelocityLane::paint (juce::Graphics& g)
                         (float) (kHeadRadius * 2),
                         1.0f);
     }
+
+    /* Playhead -- mirror the grid + CC lane so live playback tracks
+     * unbroken across the whole editor (the velocity lane sits between
+     * them). */
+    const double phLocal = grid->playheadLocalBeat();
+    if (phLocal >= 0.0)
+    {
+        const int px = xForBeat (phLocal, pxPerBeat);
+        if (px >= 0 && px < getWidth())
+        {
+            g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));
+            g.drawVerticalLine (px, 0.0f, (float) getHeight());
+        }
+    }
 }
 
 std::uint64_t VelocityLane::hitTestStem (int x, int y,

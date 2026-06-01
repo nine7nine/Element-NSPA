@@ -280,6 +280,19 @@ void CcLane::paint (juce::Graphics& g)
 
     const auto area = curveArea();
 
+    /* Playhead -- mirror the grid's so live playback tracks the automation
+     * position here too (region-local beat from the grid, mapped through
+     * this lane's mirrored horizontal scroll). */
+    auto drawPlayhead = [&]
+    {
+        const double localBeat = grid->playheadLocalBeat();
+        if (localBeat < 0.0) return;
+        const int px = xForBeat (localBeat, pxPerBeat);
+        if (px < 0 || px >= getWidth()) return;
+        g.setColour (juce::Colour (0xff'40'ff'80).withAlpha (0.85f));
+        g.drawVerticalLine (px, (float) kHeaderH, (float) getHeight());
+    };
+
     /* Centre (0.5) reference + region-end fence (mirrors VelocityLane). */
     g.setColour (juce::Colour (0xff'1c'1c'1c));
     g.drawHorizontalLine (area.getCentreY(), 0.0f, (float) getWidth());
@@ -358,6 +371,7 @@ void CcLane::paint (juce::Graphics& g)
         g.setFont (monoFont (10.0f, juce::Font::plain));
         g.drawText ("click to add points (\"+\" picks a CC or parameter)",
                     area, juce::Justification::centred);
+        drawPlayhead();
         return;
     }
 
@@ -376,6 +390,8 @@ void CcLane::paint (juce::Graphics& g)
             drawCurve (lane.points, ccLaneColour (idx), true);
         ++idx;
     }
+
+    drawPlayhead();   // on top of the curves
 }
 
 void CcLane::mouseDown (const juce::MouseEvent& e)

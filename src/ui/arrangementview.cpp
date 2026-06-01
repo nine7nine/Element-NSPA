@@ -5975,17 +5975,6 @@ private:
             }
         }
 
-        /* Playhead overlay. */
-        const double phb = owner.lastBeat_;
-        const int phx = stripArea.getX() + (int) (phb * kPxPerBeat);
-        if (phx >= stripArea.getX() && phx < stripArea.getRight())
-        {
-            g.setColour (Colours::limegreen.withAlpha (0.9f));
-            g.drawVerticalLine (phx,
-                                (float) stripArea.getY(),
-                                (float) stripArea.getBottom());
-        }
-
         /* Track separator: a visible 1-px divider across the full width at
          * the lane's bottom border, so track boundaries are obvious AND the
          * resize handle (drag this line -> up/down cursor) is discoverable,
@@ -6000,6 +5989,21 @@ private:
         /* Automation overlay sub-rows nest directly below the clip strip
          * within this lane's full extent (laneFullHeight). */
         paintLaneAutomationOverlays (g, laneIdx);
+
+        /* Playhead overlay -- drawn LAST so it runs across BOTH the clip
+         * strip AND the automation overlay sub-rows (the overlay backdrop
+         * paints over anything drawn earlier, so a strip-only playhead
+         * vanished inside the automation band).  Spans the lane's full
+         * height. */
+        const double phb = owner.lastBeat_;
+        const int phx = stripArea.getX() + (int) (phb * kPxPerBeat);
+        if (phx >= stripArea.getX() && phx < stripArea.getRight())
+        {
+            g.setColour (Colours::limegreen.withAlpha (0.9f));
+            g.drawVerticalLine (phx,
+                                (float) laneClipTopY (laneIdx),
+                                (float) (laneClipTopY (laneIdx) + laneFullHeight (laneIdx)));
+        }
     }
 
     /** Paint the expanded automation overlay rows for one lane: a label
