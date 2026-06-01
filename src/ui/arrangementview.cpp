@@ -589,7 +589,7 @@ public:
          * seeks transport to the clicked beat; if a drag follows,
          * redefines the range from the click point.  Mirrors Ardour /
          * Bitwig convention: ruler = locator + range + marker surface. */
-        if (e.y < kRulerH && e.x >= kLabelW)
+        if (inRulerBand (e.y) && e.x >= kLabelW)
         {
             if (e.mods.isPopupMenu())
             {
@@ -610,7 +610,7 @@ public:
             repaint();
             return;
         }
-        if (e.y < kRulerH) return;   /* ruler click in label gutter */
+        if (inRulerBand (e.y)) return;   /* ruler click in label gutter */
 
         /* Automation overlay vertical resize: grab the overlay's bottom edge.
          * Checked first + works in any tool (it's below the envelope area). */
@@ -1128,6 +1128,20 @@ public:
         repaint();
     }
 
+    /** True when `y` (Body coords) is inside the STICKY ruler band.  The
+     *  ruler is painted at the viewport's vertical scroll offset
+     *  (paintRuler(g, viewport.getViewPositionY())) so it appears fixed at
+     *  the visible top -- its clickable band is therefore
+     *  [scrollY, scrollY + kRulerH], NOT [0, kRulerH].  Using a fixed
+     *  e.y < kRulerH test made the ruler (loop/range/seek) reachable only
+     *  when scrolled to the very top, and let clicks on the sticky ruler
+     *  fall through to the lane painted underneath it. */
+    bool inRulerBand (int y) const noexcept
+    {
+        const int top = owner.viewport_.getViewPositionY();
+        return y >= top && y < top + kRulerH;
+    }
+
     /** Compute the body rect of a region (the area BELOW its title
      *  strip).  Mirrors the paintLane layout maths so hit-tests +
      *  envelope edits sit precisely on the painted curve. */
@@ -1388,7 +1402,7 @@ public:
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
-        if (e.y < kRulerH) return;
+        if (inRulerBand (e.y)) return;
         const int laneIdx = rowAtY (e.y);
         if (laneIdx < 0 || laneIdx >= owner.lanes_.size()) return;
         const auto& runtime = owner.laneRuntime_.getReference (laneIdx);
@@ -2141,7 +2155,7 @@ public:
     {
         /* Cursor feedback: change to resize cursor when hovering a
          * region's right-edge handle. */
-        if (e.y < kRulerH)
+        if (inRulerBand (e.y))
         {
             setMouseCursor (juce::MouseCursor::NormalCursor);
             return;
