@@ -48,6 +48,18 @@ MidiCcLane::PointList copyLanePoints (const MidiNoteRegion& region, int cc, int 
     return {};
 }
 
+/* Distinct per-lane colour, mirroring the arranger's automationBindingColour
+ * so the piano-roll CC tabs/curves read in the same palette. */
+juce::Colour ccLaneColour (int idx) noexcept
+{
+    static const juce::uint32 kPalette[] = {
+        0xff'4a'c8'a0, 0xff'e8'a1'3a, 0xff'6a'a8'e8, 0xff'd0'6a'e0, 0xff'9a'd8'4a,
+        0xff'e8'5a'6a, 0xff'e0'c8'4a, 0xff'8a'6a'e0, 0xff'4a'c8'e0, 0xff'e0'7a'3a,
+    };
+    constexpr int n = (int) (sizeof (kPalette) / sizeof (kPalette[0]));
+    return juce::Colour (kPalette[((idx % n) + n) % n]);
+}
+
 } // namespace
 
 CcLane::CcLane (PianoRollView& parent, Services& services)
@@ -90,9 +102,26 @@ juce::Rectangle<int> CcLane::curveArea() const noexcept
              juce::jmax (1, getHeight() - kHeaderH - kCurvePadY * 2) };
 }
 
-juce::Rectangle<int> CcLane::selectorRect() const noexcept
+CcLane::CcChipLayout CcLane::ccChipLayout() const
 {
-    return { 2, 1, 96, kHeaderH - 2 };
+    CcChipLayout out;
+    const int y = 1, h = kHeaderH - 2;
+    int x = 2;
+    if (auto* region = const_cast<CcLane*> (this)->resolveBoundRegion())
+        if (const auto* snap = region->loadCcSnapshot())
+        {
+            int i = 0;
+            for (const auto& lane : *snap)
+            {
+                const int w = 44;   // "CC nnn"
+                out.chips.push_back ({ lane.ccNumber, lane.channel, i,
+                                       juce::Rectangle<int> (x, y, w, h) });
+                x += w + 3;
+                ++i;
+            }
+        }
+    out.addRect = juce::Rectangle<int> (x, y, 16, h);
+    return out;
 }
 
 int CcLane::xForBeat (double localBeat, int pxPerBeat) const noexcept
@@ -175,27 +204,34 @@ void CcLane::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xff'30'30'30));
     g.drawHorizontalLine (0, 0.0f, (float) getWidth());
 
-    /* Header: "CC n  <name>" selector chip. */
-    const auto sel = selectorRect();
-    g.setColour (juce::Colour (0xff'20'20'26));
-    g.fillRect (sel);
-    g.setColour (juce::Colour (0xff'40'40'48));
-    g.drawRect (sel, 1);
-    g.setColour (juce::Colours::white.withAlpha (0.85f));
-    g.setFont (monoFont (9.5f, juce::Font::bold));
-    juce::String name;
-    for (const auto& c : kCommonCcs)
-        if (c.cc == ccNumber_) { name = c.name; break; }
-    g.drawText ("CC " + juce::String (ccNumber_)
-                    + (name.isNotEmpty() ? "  " + name : juce::String()) + "  v",
-                sel.reduced (4, 0), juce::Justification::centredLeft);
-
     auto* region = resolveBoundRegion();
-    if (region == nullptr) return;
-    auto* grid = parent_.getGrid();
-    if (grid == nullptr) return;
-    const int pxPerBeat = grid->getPxPerBeat();
-    if (pxPerBeat <= 0) return;
+    auto* grid   = parent_.getGrid();
+    const int pxPerBeat = grid != nullptr ? grid->getPxPerBeat() : 0;
+
+    /* --- Tabbed chip rail: one colour-coded chip per CC lane + "+". --- */
+    const auto layout = ccChipLayout();
+    g.setFont (monoFont (9.0f, juce::Font::bold));
+    for (const auto& chip : layout.chips)
+    {
+        const bool active = (chip.cc == ccNumber_ && chip.channel == channel_);
+        const juce::Colour col = ccLaneColour (chip.laneIndex);
+        g.setColour (active ? col
+                            : col.withMultipliedBrightness (0.32f).withAlpha (0.85f));
+        g.fillRect (chip.rect);
+        g.setColour (active ? col.brighter (0.25f) : col.withAlpha (0.45f));
+        g.drawRect (chip.rect, 1);                 // no white active outline
+        g.setColour (active ? col.contrasting (0.92f)
+                            : col.brighter (0.3f).withAlpha (0.95f));
+        g.drawText ("CC " + juce::String (chip.cc),
+                    chip.rect.reduced (3, 0), juce::Justification::centredLeft, true);
+    }
+    g.setColour (juce::Colour (0xff'2c'2c'32));
+    g.fillRect (layout.addRect);
+    g.setColour (juce::Colours::white.withAlpha (0.7f));
+    g.setFont (monoFont (11.0f, juce::Font::bold));
+    g.drawText ("+", layout.addRect, juce::Justification::centred);
+
+    if (region == nullptr || pxPerBeat <= 0) return;
 
     const auto area = curveArea();
 
@@ -212,88 +248,113 @@ void CcLane::paint (juce::Graphics& g)
         g.drawVerticalLine (regionEndX, 0.0f, (float) getHeight());
     }
 
-    const auto pts = copyLanePoints (*region, ccNumber_, channel_);
-    if (pts.empty())
+    const float leftX  = (float) xForBeat (0.0, pxPerBeat);
+    const float rightX = (float) xForBeat (region->lengthBeats, pxPerBeat);
+
+    /* Draw ONE lane's curve.  Active = full colour + 2D bend handles +
+     * breakpoint squares; ghost = dim, no handles.  Lead-in/out hold the
+     * end values flat across the whole region (real-automation feel). */
+    auto drawCurve = [&] (const MidiCcLane::PointList& pts, juce::Colour col, bool active)
+    {
+        if (pts.empty()) return;
+        g.setColour (active ? col : col.withAlpha (0.35f));
+        const float strokeW = active ? 1.6f : 1.1f;
+
+        if (pts.size() == 1)
+        {
+            const float y = yForValue (pts[0].valueNormalized);
+            g.drawLine (leftX, y, rightX, y, strokeW);
+        }
+        else
+        {
+            juce::Path path;
+            path.startNewSubPath (leftX, yForValue (pts.front().valueNormalized));
+            for (size_t i = 0; i + 1 < pts.size(); ++i)
+            {
+                const auto& from = pts[i];
+                const auto& to   = pts[i + 1];
+                const float x0 = (float) xForBeat (from.tBeats, pxPerBeat);
+                const float x1 = (float) xForBeat (to.tBeats, pxPerBeat);
+                const int steps = juce::jlimit (1, 96, (int) std::abs (x1 - x0) / 3);
+                for (int s = 0; s <= steps; ++s)
+                {
+                    const double f  = (double) s / (double) steps;
+                    path.lineTo (x0 + (float) f * (x1 - x0),
+                                 yForValue (segValueAt (from, to, f)));
+                }
+            }
+            path.lineTo (rightX, yForValue (pts.back().valueNormalized));
+            g.strokePath (path, juce::PathStrokeType (strokeW));
+        }
+
+        if (! active) return;
+
+        for (size_t i = 0; i + 1 < pts.size(); ++i)
+        {
+            const double cot = juce::jlimit (0.25, 0.75, pts[i].curve.offsetT);
+            const double pinBeat = pts[i].tBeats + cot * (pts[i + 1].tBeats - pts[i].tBeats);
+            const double chordMid = 0.5 * (pts[i].valueNormalized + pts[i + 1].valueNormalized);
+            const double pinV = juce::jlimit (0.0, 1.0, chordMid + pts[i].curve.offsetV);
+            g.setColour (col.withAlpha (0.5f));
+            g.drawEllipse ((float) xForBeat (pinBeat, pxPerBeat) - 3.0f,
+                           yForValue (pinV) - 3.0f, 6.0f, 6.0f, 1.2f);
+        }
+        g.setColour (col.brighter (0.5f));
+        for (const auto& p : pts)
+            g.fillRect (juce::Rectangle<float> (
+                (float) xForBeat (p.tBeats, pxPerBeat) - 2.5f,
+                yForValue (p.valueNormalized) - 2.5f, 5.0f, 5.0f));
+    };
+
+    const auto* snap = region->loadCcSnapshot();
+    if (snap == nullptr || snap->empty())
     {
         g.setColour (juce::Colours::white.withAlpha (0.25f));
         g.setFont (monoFont (10.0f, juce::Font::plain));
-        g.drawText ("click to add CC points",
+        g.drawText ("click to add CC points (\"+\" picks a controller)",
                     area, juce::Justification::centred);
         return;
     }
 
-    const juce::Colour curveCol { 0xff'd0'9a'48 };   // amber, distinct from velocity blue
-
-    /* Segments through the curve shape.  The curve is held flat at the
-     * first point's value from the region start, and at the last point's
-     * value to the region end (lead-in / lead-out), so it spans the whole
-     * region like a real automation lane rather than floating between the
-     * outermost points. */
-    g.setColour (curveCol);
-    const float leftX  = (float) xForBeat (0.0, pxPerBeat);
-    const float rightX = (float) xForBeat (region->lengthBeats, pxPerBeat);
-    if (pts.size() == 1)
+    /* Ghosts first, the active lane on top so its handles are reachable. */
+    int idx = 0;
+    for (const auto& lane : *snap)
     {
-        const float y = yForValue (pts[0].valueNormalized);
-        g.drawLine (leftX, y, rightX, y, 1.4f);
+        if (! (lane.ccNumber == ccNumber_ && lane.channel == channel_))
+            drawCurve (lane.points, ccLaneColour (idx), false);
+        ++idx;
     }
-    else
+    idx = 0;
+    for (const auto& lane : *snap)
     {
-        juce::Path path;
-        bool started = false;
-        /* Lead-in: flat at the first point's value from the region start. */
-        path.startNewSubPath (leftX, yForValue (pts.front().valueNormalized));
-        started = true;
-        for (size_t i = 0; i + 1 < pts.size(); ++i)
-        {
-            const auto& from = pts[i];
-            const auto& to   = pts[i + 1];
-            const float x0 = (float) xForBeat (from.tBeats, pxPerBeat);
-            const float x1 = (float) xForBeat (to.tBeats, pxPerBeat);
-            const int steps = juce::jlimit (1, 96, (int) std::abs (x1 - x0) / 3);
-            for (int s = 0; s <= steps; ++s)
-            {
-                const double f  = (double) s / (double) steps;
-                const float px = x0 + (float) f * (x1 - x0);
-                const float py = yForValue (segValueAt (from, to, f));
-                if (! started) { path.startNewSubPath (px, py); started = true; }
-                else            path.lineTo (px, py);
-            }
-        }
-        /* Lead-out: flat at the last point's value to the region end. */
-        path.lineTo (rightX, yForValue (pts.back().valueNormalized));
-        g.strokePath (path, juce::PathStrokeType (1.4f));
-    }
-
-    /* Segment 2D bend handles -- hollow rings sitting ON the curve at the
-     * bend pin (offsetT, chordMid+offsetV); drag anywhere on the line to
-     * shape, like the volume envelope. */
-    for (size_t i = 0; i + 1 < pts.size(); ++i)
-    {
-        const double cot = juce::jlimit (0.25, 0.75, pts[i].curve.offsetT);
-        const double pinBeat = pts[i].tBeats + cot * (pts[i + 1].tBeats - pts[i].tBeats);
-        const double chordMid = 0.5 * (pts[i].valueNormalized + pts[i + 1].valueNormalized);
-        const double pinV = juce::jlimit (0.0, 1.0, chordMid + pts[i].curve.offsetV);
-        const float mx = (float) xForBeat (pinBeat, pxPerBeat);
-        const float my = yForValue (pinV);
-        g.setColour (curveCol.withAlpha (0.5f));
-        g.drawEllipse (mx - 3.0f, my - 3.0f, 6.0f, 6.0f, 1.2f);
-    }
-
-    /* Breakpoint handles (filled squares, on top of midpoint rings). */
-    g.setColour (curveCol.brighter (0.5f));
-    for (const auto& p : pts)
-    {
-        const float hx = (float) xForBeat (p.tBeats, pxPerBeat);
-        const float hy = yForValue (p.valueNormalized);
-        g.fillRect (juce::Rectangle<float> (hx - 2.5f, hy - 2.5f, 5.0f, 5.0f));
+        if (lane.ccNumber == ccNumber_ && lane.channel == channel_)
+            drawCurve (lane.points, ccLaneColour (idx), true);
+        ++idx;
     }
 }
 
 void CcLane::mouseDown (const juce::MouseEvent& e)
 {
-    /* Header selector chip. */
-    if (selectorRect().contains (e.x, e.y)) { showSelectorMenu (e.getScreenPosition()); return; }
+    /* Header chip rail: click a chip to make that CC the active/editable
+     * lane, or "+" to pick/add a controller. */
+    if (e.y < kHeaderH)
+    {
+        const auto layout = ccChipLayout();
+        if (layout.addRect.contains (e.x, e.y))
+        {
+            showSelectorMenu (e.getScreenPosition());
+            return;
+        }
+        for (const auto& chip : layout.chips)
+            if (chip.rect.contains (e.x, e.y))
+            {
+                ccNumber_ = chip.cc;
+                channel_  = chip.channel;
+                repaint();
+                return;
+            }
+        return;   // header strip, no chip hit
+    }
 
     auto* region = resolveBoundRegion();
     if (region == nullptr) return;
@@ -301,8 +362,6 @@ void CcLane::mouseDown (const juce::MouseEvent& e)
     if (grid == nullptr) return;
     const int pxPerBeat = grid->getPxPerBeat();
     if (pxPerBeat <= 0) return;
-
-    if (e.y < kHeaderH) return;
 
     const int existing = findPointNear (*region, e.x, e.y, pxPerBeat);
 

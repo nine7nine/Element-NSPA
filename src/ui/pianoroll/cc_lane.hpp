@@ -6,6 +6,8 @@
 #include <element/juce/gui_basics.hpp>
 #include <element/services.hpp>
 
+#include <vector>
+
 namespace element {
 
 class MidiNoteRegion;
@@ -82,14 +84,22 @@ private:
     };
     Drag drag_;
 
-    static constexpr int kHeaderH      = 15;   // "CC n" selector strip
+    static constexpr int kHeaderH      = 15;   // chip-rail strip
     static constexpr int kCurvePadY    = 6;
-    static constexpr double kHandleGrabPx = 6.0;
+    static constexpr double kHandleGrabPx = 8.0;   // match arranger overlay grab
 
     /* Layout: the header strip claims the top kHeaderH; the curve area
      * is everything below, inset kCurvePadY top/bottom. */
     juce::Rectangle<int> curveArea() const noexcept;
-    juce::Rectangle<int> selectorRect() const noexcept;
+
+    /* Tabbed chip rail (Cubase/arranger style): one colour-coded chip per
+     * CC lane present on the region + a trailing "+" add chip.  Clicking a
+     * chip makes that (cc, channel) the active/editable lane; all lanes
+     * render superimposed in the curve area, the active one bright with
+     * handles, the rest dim ghosts. */
+    struct CcChip { int cc; int channel; int laneIndex; juce::Rectangle<int> rect; };
+    struct CcChipLayout { std::vector<CcChip> chips; juce::Rectangle<int> addRect; };
+    CcChipLayout ccChipLayout() const;
 
     int    xForBeat   (double localBeat, int pxPerBeat) const noexcept;
     double beatForX   (int x, int pxPerBeat) const noexcept;
