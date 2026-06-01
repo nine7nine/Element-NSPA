@@ -15,7 +15,6 @@ using element::MidiCcLane;
 using element::MidiNote;
 using element::MidiNoteRegion;
 using element::dsp::automation::AutomationPoint;
-using element::dsp::automation::CurveAlgorithm;
 
 namespace {
 
@@ -24,15 +23,17 @@ inline bool nearly (double a, double b, double tol = 1e-9)
     return std::abs (a - b) <= tol;
 }
 
+/* offsetT defaults to 0.5 (centred handle = straight chord); pass a
+ * non-default offsetT/offsetV to bend the segment after this point. */
 AutomationPoint pt (double t, double v,
-                    CurveAlgorithm algo = CurveAlgorithm::Linear,
-                    double curviness = 0.0)
+                    double offsetT = 0.5,
+                    double offsetV = 0.0)
 {
     AutomationPoint p;
     p.tBeats          = t;
     p.valueNormalized = v;
-    p.curve.algorithm = algo;
-    p.curve.curviness = curviness;
+    p.curve.offsetT   = offsetT;
+    p.curve.offsetV   = offsetV;
     return p;
 }
 
@@ -115,7 +116,7 @@ BOOST_AUTO_TEST_CASE (value_tree_round_trip_preserves_points_and_curve)
     lane.ccNumber = 11;
     lane.channel  = 3;
     lane.points   = { pt (0.0, 0.1),
-                      pt (2.0, 0.9, CurveAlgorithm::Exponent, 0.5),
+                      pt (2.0, 0.9, 0.65, 0.2),   // bent handle
                       pt (4.0, 0.4) };
 
     const auto vt = lane.toValueTree();
@@ -126,11 +127,11 @@ BOOST_AUTO_TEST_CASE (value_tree_round_trip_preserves_points_and_curve)
     BOOST_REQUIRE_EQUAL (back.points.size(), (size_t) 3);
     BOOST_CHECK (nearly (back.points[1].tBeats, 2.0));
     BOOST_CHECK (nearly (back.points[1].valueNormalized, 0.9));
-    BOOST_CHECK (back.points[1].curve.algorithm == CurveAlgorithm::Exponent);
-    BOOST_CHECK (nearly (back.points[1].curve.curviness, 0.5));
-    /* Default Linear / curviness-0 segment survives the sparse-write. */
-    BOOST_CHECK (back.points[0].curve.algorithm == CurveAlgorithm::Linear);
-    BOOST_CHECK (nearly (back.points[0].curve.curviness, 0.0));
+    BOOST_CHECK (nearly (back.points[1].curve.offsetT, 0.65));
+    BOOST_CHECK (nearly (back.points[1].curve.offsetV, 0.2));
+    /* Default centred handle survives the sparse-write. */
+    BOOST_CHECK (nearly (back.points[0].curve.offsetT, 0.5));
+    BOOST_CHECK (nearly (back.points[0].curve.offsetV, 0.0));
 }
 
 //==============================================================================
@@ -191,7 +192,7 @@ BOOST_AUTO_TEST_CASE (region_round_trip_preserves_notes_and_cc)
     n.pitch = 64; n.onBeat = 1.0; n.lengthBeats = 0.5; n.velocity = 90;
     r.addNote (n);
 
-    r.setCcLane (74, 2, { pt (0.0, 0.1), pt (4.0, 0.9, CurveAlgorithm::Vital, -0.3) });
+    r.setCcLane (74, 2, { pt (0.0, 0.1), pt (4.0, 0.9, 0.4, -0.15) });
 
     const auto vt = r.toValueTree();
     auto back = MidiNoteRegion::fromValueTree (vt);
@@ -206,8 +207,8 @@ BOOST_AUTO_TEST_CASE (region_round_trip_preserves_notes_and_cc)
     BOOST_CHECK_EQUAL ((*cc)[0].ccNumber, 74);
     BOOST_CHECK_EQUAL ((*cc)[0].channel,  2);
     BOOST_REQUIRE_EQUAL ((*cc)[0].points.size(), (size_t) 2);
-    BOOST_CHECK ((*cc)[0].points[1].curve.algorithm == CurveAlgorithm::Vital);
-    BOOST_CHECK (nearly ((*cc)[0].points[1].curve.curviness, -0.3));
+    BOOST_CHECK (nearly ((*cc)[0].points[1].curve.offsetT, 0.4));
+    BOOST_CHECK (nearly ((*cc)[0].points[1].curve.offsetV, -0.15));
 }
 
 BOOST_AUTO_TEST_CASE (clone_copies_cc_lanes)

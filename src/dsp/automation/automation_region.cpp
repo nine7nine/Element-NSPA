@@ -20,8 +20,8 @@ const juce::Identifier kLoopedAttr        { "loop" };
 const juce::Identifier kPointTag          { "p" };
 const juce::Identifier kPointTAttr        { "t" };
 const juce::Identifier kPointVAttr        { "v" };
-const juce::Identifier kPointAlgoAttr     { "algo" };
-const juce::Identifier kPointCurvinessAttr{ "curv" };
+const juce::Identifier kPointOffsetTAttr  { "cot" };   // bend handle X (0.25..0.75)
+const juce::Identifier kPointOffsetVAttr  { "cov" };   // bend handle value offset
 const juce::Identifier kAutomationRegionTag{ "automationRegion" };
 
 /* Threshold for "matching" floating-point coordinates in
@@ -93,16 +93,9 @@ double AutomationRegion::sampleAtBeats (double localBeats) const noexcept
         return to.valueNormalized;
 
     const double xNorm = (localBeats - from.tBeats) / span;
-    const double yNorm = evaluate (xNorm, from.curve, from.valueNormalized > to.valueNormalized);
-    /* evaluate() returns a VALUE-NORMALISED position in [0,1] where 0 maps
-     * to the lower endpoint value and 1 to the higher (Linear returns 1-x
-     * when startHigher), so the segment must be mapped onto [lo, hi] --
-     * NOT from + yn*(to-from), which only happens to be correct for
-     * ascending segments and reverses descending ones into a rising
-     * "sawtooth". */
-    const double lo = std::min (from.valueNormalized, to.valueNormalized);
-    const double hi = std::max (from.valueNormalized, to.valueNormalized);
-    return lo + yNorm * (hi - lo);
+    /* evaluateSegment returns the actual value directly (value-space 2D
+     * Bezier between the two endpoints), so no lo/hi remap is needed. */
+    return evaluateSegment (xNorm, from.valueNormalized, to.valueNormalized, from.curve);
 }
 
 //==============================================================================
@@ -197,10 +190,10 @@ juce::ValueTree AutomationRegion::toValueTree() const
             juce::ValueTree pv (kPointTag);
             pv.setProperty (kPointTAttr, p.tBeats, nullptr);
             pv.setProperty (kPointVAttr, p.valueNormalized, nullptr);
-            if (p.curve.algorithm != CurveAlgorithm::Linear)
-                pv.setProperty (kPointAlgoAttr, (int) p.curve.algorithm, nullptr);
-            if (p.curve.curviness != 0.0)
-                pv.setProperty (kPointCurvinessAttr, p.curve.curviness, nullptr);
+            if (p.curve.offsetT != 0.5)
+                pv.setProperty (kPointOffsetTAttr, p.curve.offsetT, nullptr);
+            if (p.curve.offsetV != 0.0)
+                pv.setProperty (kPointOffsetVAttr, p.curve.offsetV, nullptr);
             v.appendChild (pv, nullptr);
         }
     }
@@ -228,9 +221,8 @@ std::unique_ptr<AutomationRegion> AutomationRegion::fromValueTree (const juce::V
         AutomationPoint p;
         p.tBeats          = (double) pv.getProperty (kPointTAttr, 0.0);
         p.valueNormalized = (double) pv.getProperty (kPointVAttr, 0.0);
-        const int algo    = (int)    pv.getProperty (kPointAlgoAttr, (int) CurveAlgorithm::Linear);
-        p.curve.algorithm = (CurveAlgorithm) juce::jlimit (0, (int) CurveAlgorithm::Pulse, algo);
-        p.curve.curviness = (double) pv.getProperty (kPointCurvinessAttr, 0.0);
+        p.curve.offsetT = (double) pv.getProperty (kPointOffsetTAttr, 0.5);
+        p.curve.offsetV = (double) pv.getProperty (kPointOffsetVAttr, 0.0);
         pts.push_back (p);
     }
     r->setPoints (std::move (pts));

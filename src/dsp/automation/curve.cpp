@@ -8,110 +8,48 @@
 
 namespace element::dsp::automation {
 
-namespace {
-
-/* Equality check tolerant of double epsilon -- a curviness of 0
- * computed from a slider can show up as ~1e-17 instead of exact zero. */
-inline bool nearZero (double v) noexcept
-{
-    return std::abs (v) < 1e-10;
-}
-
-} // namespace
-
-double evaluate (double x, CurveOptions opts, bool startHigher) noexcept
+double evaluateSegment (double x, double v0, double v1, CurveOptions opts) noexcept
 {
     x = std::clamp (x, 0.0, 1.0);
-    const bool curveUp = opts.curviness >= 0.0;
-    double val = -1.0;
 
-    switch (opts.algorithm)
+    /* Straight chord (default handle) -- the common case, no sqrt. */
+    const bool centred = std::abs (opts.offsetT - 0.5) < 1e-9;
+    if (centred && std::abs (opts.offsetV) < 1e-12)
+        return std::clamp (v0 + x * (v1 - v0), 0.0, 1.0);
+
+    /* Value-space quadratic Bezier: endpoints P0=(0,v0), P2=(1,v1),
+     * control point P1 derived so the curve passes through the handle
+     * pin (offsetT, chordMid + offsetV) at Bezier parameter u=0.5.
+     *   B(0.5) = 0.25 P0 + 0.5 P1 + 0.25 P2 = pin
+     *   => P1 = 2*pin - 0.5*(P0 + P2)
+     * Mirrors paintVolumeEnvelope's construction exactly. */
+    const double chordMid = 0.5 * (v0 + v1);
+    const double pinX = std::clamp (opts.offsetT, 0.25, 0.75);
+    const double pinY = chordMid + opts.offsetV;
+    const double cx = 2.0 * pinX - 0.5;          // P1.x
+    const double cy = 2.0 * pinY - chordMid;     // P1.y  (= chordMid + 2*offsetV)
+
+    /* Invert x(u) = (1-2cx) u^2 + 2cx u  for u in [0,1]. */
+    const double a = 1.0 - 2.0 * cx;
+    double u;
+    if (std::abs (a) < 1e-9)
     {
-        case CurveAlgorithm::Linear:
-        {
-            /* Linear ignores curviness entirely.  The reflection convention
-             * matches Exponent so a Linear segment between two points
-             * draws the expected straight ramp regardless of direction. */
-            if (! startHigher) val = x;
-            else               val = 1.0 - x;
-            break;
-        }
-
-        case CurveAlgorithm::Exponent:
-        {
-            double c = opts.curviness * kExponentCurvinessBound;
-            c = 1.0 - std::abs (c);
-            if (! startHigher) x = 1.0 - x;
-            if (curveUp)        x = 1.0 - x;
-            val = nearZero (c) ? x : std::pow (x, c);
-            if (! curveUp) val = 1.0 - val;
-            break;
-        }
-
-        case CurveAlgorithm::SuperEllipse:
-        {
-            double c = opts.curviness * kSuperEllipseCurvinessBound;
-            c = 1.0 - std::abs (c);
-            if (! startHigher) x = 1.0 - x;
-            if (curveUp)        x = 1.0 - x;
-            val = nearZero (c)
-                    ? x
-                    : std::pow (1.0 - std::pow (x, c), 1.0 / c);
-            if (curveUp) val = 1.0 - val;
-            break;
-        }
-
-        case CurveAlgorithm::Vital:
-        {
-            double c = opts.curviness * kVitalCurvinessBound;
-            c = -c * 10.0;
-            if (startHigher) x = 1.0 - x;
-            val = nearZero (c) ? x : std::expm1 (c * x) / std::expm1 (c);
-            break;
-        }
-
-        case CurveAlgorithm::Logarithmic:
-        {
-            /* Two-branch logarithmic curve -- the inner exponent must be
-             * derived from curviness magnitude (the sign is consumed by
-             * curveUp).  The expression below matches Zrythm's; comments
-             * inline to keep the derivation discoverable. */
-            constexpr float bound = 1e-12f;
-            const float mag = std::clamp (
-                static_cast<float> (std::abs (opts.curviness)),
-                0.01f, 1.f - bound);
-            const float s = mag * 10.f;
-            const float c = std::clamp ((10.f - s) / std::pow (s, s),
-                                          bound, 10.f);
-
-            if (! startHigher) x = 1.0 - x;
-            if (curveUp)        x = 1.0 - x;
-
-            const float a  = std::log (c);
-            const float b  = 1.f / std::log (1.f + (1.f / c));
-            const float xf = static_cast<float> (x);
-            float fval;
-            if (curveUp)
-                fval = (std::log (xf + c) - a) * b;
-            else
-                fval = (a - std::log (xf + c)) * b + 1.f;
-            val = static_cast<double> (fval);
-            break;
-        }
-
-        case CurveAlgorithm::Pulse:
-        {
-            /* Hard step at (1 + curviness)/2.  Useful for stepped
-             * automation segments without dragging in a separate "step"
-             * region type. */
-            const double threshold = (1.0 + opts.curviness) * 0.5;
-            val = (threshold > x) ? 0.0 : 1.0;
-            if (startHigher) val = 1.0 - val;
-            break;
-        }
+        /* Linear in u (cx == 0.5): x = 2cx u = u. */
+        u = (std::abs (cx) < 1e-12) ? x : x / (2.0 * cx);
     }
+    else
+    {
+        /* a u^2 + 2cx u - x = 0  ->  u = (-cx + sqrt(cx^2 + a x)) / a.
+         * The '+' root is the one in [0,1] for a monotonic segment
+         * (offsetT clamped to [0.25,0.75] keeps x(u) monotonic). */
+        const double disc = std::max (0.0, cx * cx + a * x);
+        u = (-cx + std::sqrt (disc)) / a;
+    }
+    u = std::clamp (u, 0.0, 1.0);
 
-    return std::clamp (val, 0.0, 1.0);
+    const double omu = 1.0 - u;
+    const double y = omu * omu * v0 + 2.0 * omu * u * cy + u * u * v1;
+    return std::clamp (y, 0.0, 1.0);
 }
 
 } // namespace element::dsp::automation

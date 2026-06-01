@@ -4492,41 +4492,84 @@ private:
         return (best >= 0 && bestD <= kAutoHandleGrabPx) ? best : -1;
     }
 
-    /** Value-normalised position of segment (from,to) at fraction f,
-     *  mirroring paintAutomationCurve + sampleAtBeats. */
+    /** Value-normalised position of segment (from,to) at fraction f --
+     *  the unified value-space 2D-Bezier shared with the audio thread. */
     static double autoSegValueAt (const dsp::automation::AutomationPoint& from,
                                   const dsp::automation::AutomationPoint& to,
                                   double f)
     {
-        const bool startHigher = from.valueNormalized > to.valueNormalized;
-        const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
-        const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
-        const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
-        return lo + yn * (hi - lo);
+        return dsp::automation::evaluateSegment (
+            f, from.valueNormalized, to.valueNormalized, from.curve);
     }
 
-    /** Index of the SEGMENT (from-point index) whose midpoint handle is
+    /** Pixel position of segment i's 2D bend handle (the pin the curve
+     *  passes through), in curveArea space.  Mirrors the volume
+     *  envelope's envSegmentMidHitAt pin maths so the handle sits ON the
+     *  curve and drags it in 2D. */
+    juce::Point<float> autoHandlePx (const dsp::automation::AutomationRegion* region,
+                                     size_t i, const Rectangle<int>& curveArea) const
+    {
+        const auto* pts = region->loadSnapshot();
+        const auto& a = (*pts)[i];
+        const auto& b = (*pts)[i + 1];
+        const double cot = juce::jlimit (0.25, 0.75, a.curve.offsetT);
+        const double pinBeat = a.tBeats + cot * (b.tBeats - a.tBeats);
+        const double chordMid = 0.5 * (a.valueNormalized + b.valueNormalized);
+        const double pinV = juce::jlimit (0.0, 1.0, chordMid + a.curve.offsetV);
+        const float px = (float) (kLabelW
+                       + (region->positionBeats + pinBeat) * (double) kPxPerBeat);
+        const float py = (float) (curveArea.getBottom() - pinV * curveArea.getHeight());
+        return { px, py };
+    }
+
+    /** Index of the SEGMENT (from-point index) whose 2D bend handle is
      *  within grab range of (x, y), or -1.  Flat segments report none. */
     int findMidpointNear (dsp::automation::AutomationRegion* region,
                           const Rectangle<int>& curveArea, int x, int y) const
     {
         const auto* pts = region->loadSnapshot();
         if (pts == nullptr) return -1;
-        const double t = (double) curveArea.getY();
-        const double b = (double) curveArea.getBottom();
         int    best  = -1;
         double bestD = 1.0e9;
         for (size_t i = 0; i + 1 < pts->size(); ++i)
         {
-            if (std::abs ((*pts)[i].valueNormalized - (*pts)[i + 1].valueNormalized) < 1e-6)
-                continue;
-            const double midBeat = ((*pts)[i].tBeats + (*pts)[i + 1].tBeats) * 0.5;
-            const double px = (double) kLabelW
-                            + (region->positionBeats + midBeat) * (double) kPxPerBeat;
-            const double py = b - juce::jlimit (0.0, 1.0,
-                                  autoSegValueAt ((*pts)[i], (*pts)[i + 1], 0.5)) * (b - t);
-            const double d  = juce::jmax (std::abs (px - x), std::abs (py - y));
+            const auto h = autoHandlePx (region, i, curveArea);
+            const double d = juce::jmax (std::abs (h.x - (float) x),
+                                         std::abs (h.y - (float) y));
             if (d < bestD) { bestD = d; best = (int) i; }
+        }
+        return (best >= 0 && bestD <= kAutoHandleGrabPx) ? best : -1;
+    }
+
+    /** Index of the SEGMENT whose drawn curve passes within grab range of
+     *  (x, y) -- lets the user grab a slope anywhere along the line, like
+     *  the volume envelope.  Samples the segment in pixel space. */
+    int findSegmentLineNear (dsp::automation::AutomationRegion* region,
+                             const Rectangle<int>& curveArea, int x, int y) const
+    {
+        const auto* pts = region->loadSnapshot();
+        if (pts == nullptr || pts->size() < 2) return -1;
+        const double b = (double) curveArea.getBottom();
+        const double h = (double) curveArea.getHeight();
+        int    best  = -1;
+        double bestD = 1.0e9;
+        for (size_t i = 0; i + 1 < pts->size(); ++i)
+        {
+            const auto& a = (*pts)[i];
+            const auto& c = (*pts)[i + 1];
+            const double x0 = (double) kLabelW + (region->positionBeats + a.tBeats) * (double) kPxPerBeat;
+            const double x1 = (double) kLabelW + (region->positionBeats + c.tBeats) * (double) kPxPerBeat;
+            if ((double) x < juce::jmin (x0, x1) - kAutoHandleGrabPx
+                || (double) x > juce::jmax (x0, x1) + kAutoHandleGrabPx) continue;
+            constexpr int kSamples = 10;
+            for (int s = 0; s <= kSamples; ++s)
+            {
+                const double f  = (double) s / kSamples;
+                const double px = x0 + f * (x1 - x0);
+                const double py = b - autoSegValueAt (a, c, f) * h;
+                const double d  = std::hypot (px - x, py - y);
+                if (d < bestD) { bestD = d; best = (int) i; }
+            }
         }
         return (best >= 0 && bestD <= kAutoHandleGrabPx) ? best : -1;
     }
@@ -4642,7 +4685,7 @@ private:
             repaint();
             return;
         }
-        const int seg = findMidpointNear (region, curveArea, e.x, e.y);
+        const int seg = findSegmentLineNear (region, curveArea, e.x, e.y);
         if (seg >= 0)
         {
             beginEdit (AutoEditMode::ShapeCurve, -1, seg);
@@ -4704,30 +4747,25 @@ private:
             pts[(size_t) i].tBeats          = local;
             pts[(size_t) i].valueNormalized = overlayYToValue (ay, curveArea);
         }
-        else // ShapeCurve
+        else // ShapeCurve -- 2D bend handle, identical feel to the volume env
         {
             const int i = autoEdit_.segmentIndex;
             if (i < 0 || i + 1 >= (int) pts.size()) return;
-            const double v0 = pts[(size_t) i].valueNormalized;
-            const double v1 = pts[(size_t) i + 1].valueNormalized;
-            const double lo = juce::jmin (v0, v1);
-            const double hi = juce::jmax (v0, v1);
-            if (hi - lo < 1e-6) return;
+            const auto& a = pts[(size_t) i];
+            const auto& b = pts[(size_t) i + 1];
 
-            /* Drive curviness so the curve's midpoint passes through the
-             * cursor (analytic inverse of Exponent's midpoint), matching
-             * the smooth volume-envelope feel. */
-            const double M = juce::jlimit (0.02, 0.98,
-                                           (overlayYToValue (e.y, curveArea) - lo) / (hi - lo));
-            const double k = std::log (0.5);
-            double c;
-            if (M >= 0.5) c =  (1.0 - std::log (M)       / k) / 0.95;
-            else          c = -(1.0 - std::log (1.0 - M) / k) / 0.95;
-            c = juce::jlimit (-1.0, 1.0, c);
-            pts[(size_t) i].curve.algorithm = (std::abs (c) < 1e-3)
-                                                  ? CurveAlgorithm::Linear
-                                                  : CurveAlgorithm::Exponent;
-            pts[(size_t) i].curve.curviness = c;
+            /* offsetT: cursor X as a fraction within the segment (no snap --
+             * curve shaping is continuous).  offsetV: cursor value minus the
+             * chord midpoint, so dragging up bulges the curve up regardless
+             * of segment direction. */
+            const double localBeat = overlayXToBeat (e.x) - region->positionBeats;
+            const double span = juce::jmax (1e-9, b.tBeats - a.tBeats);
+            const double cot  = juce::jlimit (0.25, 0.75, (localBeat - a.tBeats) / span);
+            const double chordMid = 0.5 * (a.valueNormalized + b.valueNormalized);
+            const double pinV = overlayYToValue (e.y, curveArea);
+
+            pts[(size_t) i].curve.offsetT = cot;
+            pts[(size_t) i].curve.offsetV = pinV - chordMid;
         }
 
         region->setPoints (pts);
@@ -4751,17 +4789,12 @@ private:
     {
         using namespace element::dsp::automation;
 
-        juce::PopupMenu curveMenu;
-        curveMenu.addItem (100, "Linear");
-        curveMenu.addItem (101, "Exponential");
-        curveMenu.addItem (102, "Super-ellipse");
-        curveMenu.addItem (103, "Vital");
-        curveMenu.addItem (104, "Logarithmic");
-        curveMenu.addItem (105, "Pulse / step");
-
+        /* Curve shape is now the 2D bend handle (drag the segment line),
+         * so the discrete-algorithm submenu is gone -- the only segment
+         * action is "straighten" (reset both offsets). */
         juce::PopupMenu menu;
         menu.addItem (1, "Delete point");
-        menu.addSubMenu ("Segment curve", curveMenu);
+        menu.addItem (2, "Straighten segment after this point");
 
         /* Synchronous showAt -- mouse-usable + positions at the cursor
          * (the showMenuAsync + withTargetScreenArea variant mis-rendered
@@ -4782,19 +4815,10 @@ private:
         {
             pts.erase (pts.begin() + (long) pointIndex);
         }
-        else
+        else if (result == 2)
         {
-            CurveAlgorithm algo = CurveAlgorithm::Linear;
-            switch (result)
-            {
-                case 101: algo = CurveAlgorithm::Exponent;     break;
-                case 102: algo = CurveAlgorithm::SuperEllipse; break;
-                case 103: algo = CurveAlgorithm::Vital;        break;
-                case 104: algo = CurveAlgorithm::Logarithmic;  break;
-                case 105: algo = CurveAlgorithm::Pulse;        break;
-                default:  algo = CurveAlgorithm::Linear;       break;
-            }
-            pts[(size_t) pointIndex].curve.algorithm = algo;
+            pts[(size_t) pointIndex].curve.offsetT = 0.5;
+            pts[(size_t) pointIndex].curve.offsetV = 0.0;
         }
 
         region->setPoints (pts);
@@ -5976,18 +6000,14 @@ private:
                 {
                     const auto& from = (*pts)[i];
                     const auto& to   = (*pts)[i + 1];
-                    const bool startHigher = from.valueNormalized > to.valueNormalized;
                     const float x0 = beatToX (rPos + from.tBeats);
                     const float x1 = beatToX (rPos + to.tBeats);
                     const int   steps = juce::jlimit (1, 96, (int) std::abs (x1 - x0) / 3);
                     for (int s = 0; s <= steps; ++s)
                     {
-                        const double f  = (double) s / (double) steps;
-                        const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
-                        const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
-                        const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
-                        const double v  = lo + yn * (hi - lo);
-                        path.lineTo ((float) (x0 + f * (x1 - x0)), valueToY (v));
+                        const double f = (double) s / (double) steps;
+                        path.lineTo ((float) (x0 + f * (x1 - x0)),
+                                     valueToY (autoSegValueAt (from, to, f)));
                     }
                 }
                 path.lineTo (rightX, valueToY (pts->back().valueNormalized)); // lead-out
@@ -5996,16 +6016,13 @@ private:
 
             if (! active) continue;   // ghosts: no handles
 
-            /* Segment midpoint handles (drag to bend) -- hollow rings. */
+            /* Segment 2D bend handles (drag anywhere on the line) -- hollow
+             * rings sitting ON the curve at the bend pin. */
             for (size_t i = 0; i + 1 < pts->size(); ++i)
             {
-                if (std::abs ((*pts)[i].valueNormalized - (*pts)[i + 1].valueNormalized) < 1e-6)
-                    continue;
-                const double midBeat = ((*pts)[i].tBeats + (*pts)[i + 1].tBeats) * 0.5;
-                const float mx = beatToX (rPos + midBeat);
-                const float my = valueToY (autoSegValueAt ((*pts)[i], (*pts)[i + 1], 0.5));
+                const auto h = autoHandlePx (region, i, curveArea);
                 g.setColour (curveCol.withAlpha (0.5f));
-                g.drawEllipse (mx - 3.0f, my - 3.0f, 6.0f, 6.0f, 1.2f);
+                g.drawEllipse (h.x - 3.0f, h.y - 3.0f, 6.0f, 6.0f, 1.2f);
             }
             /* Breakpoint handles -- filled squares on top. */
             g.setColour (b.colour.brighter (0.5f));

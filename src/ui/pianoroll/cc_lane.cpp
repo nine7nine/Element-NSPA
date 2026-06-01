@@ -19,7 +19,6 @@
 namespace element {
 
 using dsp::automation::AutomationPoint;
-using dsp::automation::CurveAlgorithm;
 
 namespace {
 
@@ -139,15 +138,12 @@ int CcLane::findPointNear (const MidiNoteRegion& region, int x, int y,
 }
 
 namespace {
-/* Value of a segment at fraction f in [0,1], mirroring paint +
- * sampleAtBeats: evaluate() is value-normalised, mapped onto [lo,hi]. */
+/* Value of a segment at fraction f in [0,1] -- the unified value-space
+ * 2D-Bezier shared with the audio thread (MidiCcLane::valueAtBeats). */
 double segValueAt (const AutomationPoint& from, const AutomationPoint& to, double f)
 {
-    const bool startHigher = from.valueNormalized > to.valueNormalized;
-    const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
-    const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
-    const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
-    return lo + yn * (hi - lo);
+    return dsp::automation::evaluateSegment (
+        f, from.valueNormalized, to.valueNormalized, from.curve);
 }
 } // namespace
 
@@ -159,12 +155,14 @@ int CcLane::findMidpointNear (const MidiNoteRegion& region, int x, int y,
     double bestD = 1.0e9;
     for (size_t i = 0; i + 1 < pts.size(); ++i)
     {
-        /* Flat segment -> no bendable midpoint handle. */
-        if (std::abs (pts[i].valueNormalized - pts[i + 1].valueNormalized) < 1e-6)
-            continue;
-        const double midBeat = (pts[i].tBeats + pts[i + 1].tBeats) * 0.5;
-        const double px = xForBeat (midBeat, pxPerBeat);
-        const double py = yForValue (segValueAt (pts[i], pts[i + 1], 0.5));
+        /* 2D bend handle at the pin (offsetT, chordMid+offsetV) -- sits
+         * ON the curve, grabbable on flat segments too. */
+        const double cot = juce::jlimit (0.25, 0.75, pts[i].curve.offsetT);
+        const double pinBeat = pts[i].tBeats + cot * (pts[i + 1].tBeats - pts[i].tBeats);
+        const double chordMid = 0.5 * (pts[i].valueNormalized + pts[i + 1].valueNormalized);
+        const double pinV = juce::jlimit (0.0, 1.0, chordMid + pts[i].curve.offsetV);
+        const double px = xForBeat (pinBeat, pxPerBeat);
+        const double py = yForValue (pinV);
         const double d  = juce::jmax (std::abs (px - x), std::abs (py - y));
         if (d < bestD) { bestD = d; best = (int) i; }
     }
@@ -250,22 +248,14 @@ void CcLane::paint (juce::Graphics& g)
         {
             const auto& from = pts[i];
             const auto& to   = pts[i + 1];
-            const bool startHigher = from.valueNormalized > to.valueNormalized;
             const float x0 = (float) xForBeat (from.tBeats, pxPerBeat);
             const float x1 = (float) xForBeat (to.tBeats, pxPerBeat);
             const int steps = juce::jlimit (1, 96, (int) std::abs (x1 - x0) / 3);
             for (int s = 0; s <= steps; ++s)
             {
                 const double f  = (double) s / (double) steps;
-                const double yn = dsp::automation::evaluate (f, from.curve, startHigher);
-                /* evaluate() is value-normalised (0=lower endpoint, 1=higher);
-                 * map onto [lo,hi] so descending segments slope DOWN instead
-                 * of reversing into a rising sawtooth. */
-                const double lo = juce::jmin (from.valueNormalized, to.valueNormalized);
-                const double hi = juce::jmax (from.valueNormalized, to.valueNormalized);
-                const double v  = lo + yn * (hi - lo);
                 const float px = x0 + (float) f * (x1 - x0);
-                const float py = yForValue (v);
+                const float py = yForValue (segValueAt (from, to, f));
                 if (! started) { path.startNewSubPath (px, py); started = true; }
                 else            path.lineTo (px, py);
             }
@@ -275,16 +265,17 @@ void CcLane::paint (juce::Graphics& g)
         g.strokePath (path, juce::PathStrokeType (1.4f));
     }
 
-    /* Segment midpoint handles -- small hollow circles the user drags
-     * vertically to bend the curve (sets the from-point's curviness).
-     * Skipped on flat segments (nothing to shape). */
+    /* Segment 2D bend handles -- hollow rings sitting ON the curve at the
+     * bend pin (offsetT, chordMid+offsetV); drag anywhere on the line to
+     * shape, like the volume envelope. */
     for (size_t i = 0; i + 1 < pts.size(); ++i)
     {
-        if (std::abs (pts[i].valueNormalized - pts[i + 1].valueNormalized) < 1e-6)
-            continue;
-        const double midBeat = (pts[i].tBeats + pts[i + 1].tBeats) * 0.5;
-        const float mx = (float) xForBeat (midBeat, pxPerBeat);
-        const float my = yForValue (segValueAt (pts[i], pts[i + 1], 0.5));
+        const double cot = juce::jlimit (0.25, 0.75, pts[i].curve.offsetT);
+        const double pinBeat = pts[i].tBeats + cot * (pts[i + 1].tBeats - pts[i].tBeats);
+        const double chordMid = 0.5 * (pts[i].valueNormalized + pts[i + 1].valueNormalized);
+        const double pinV = juce::jlimit (0.0, 1.0, chordMid + pts[i].curve.offsetV);
+        const float mx = (float) xForBeat (pinBeat, pxPerBeat);
+        const float my = yForValue (pinV);
         g.setColour (curveCol.withAlpha (0.5f));
         g.drawEllipse (mx - 3.0f, my - 3.0f, 6.0f, 6.0f, 1.2f);
     }
@@ -396,31 +387,18 @@ void CcLane::mouseDrag (const juce::MouseEvent& e)
         const int i = drag_.segmentIndex;
         if (i < 0 || i + 1 >= (int) pts.size()) return;
 
-        const double v0 = pts[(size_t) i].valueNormalized;
-        const double v1 = pts[(size_t) i + 1].valueNormalized;
-        const double lo = juce::jmin (v0, v1);
-        const double hi = juce::jmax (v0, v1);
-        if (hi - lo < 1e-6) return;   // flat: nothing to bend
-
-        /* Direct manipulation: drive the segment's curviness so the curve's
-         * MIDPOINT passes through the cursor -- the smooth, controllable
-         * feel the volume envelopes have.  Exponent's midpoint as a function
-         * of curviness c is  M(c) = 0.5^(1-0.95c)        for c >= 0
-         *                    M(c) = 1 - 0.5^(1+0.95c)    for c <  0
-         * (value-normalised, independent of segment direction).  Invert it
-         * analytically so the handle tracks the cursor 1:1 instead of the
-         * old linear guess that felt dead then snapped to extremes. */
-        const double M = juce::jlimit (0.02, 0.98,
-                                       (valueForY (e.y) - lo) / (hi - lo));
-        const double k = std::log (0.5);
-        double c;
-        if (M >= 0.5) c =  (1.0 - std::log (M)       / k) / 0.95;
-        else          c = -(1.0 - std::log (1.0 - M) / k) / 0.95;
-        c = juce::jlimit (-1.0, 1.0, c);
-        pts[(size_t) i].curve.algorithm = (std::abs (c) < 1e-3)
-                                              ? CurveAlgorithm::Linear
-                                              : CurveAlgorithm::Exponent;
-        pts[(size_t) i].curve.curviness = c;
+        /* 2D bend handle, identical feel to the volume envelope: offsetT =
+         * cursor X as a fraction within the segment (no snap -- shaping is
+         * continuous); offsetV = cursor value minus the chord midpoint, so
+         * dragging up bulges the curve up regardless of segment direction. */
+        const auto& a = pts[(size_t) i];
+        const auto& b = pts[(size_t) i + 1];
+        const double localBeat = beatForX (e.x, pxPerBeat);
+        const double span = juce::jmax (1e-9, b.tBeats - a.tBeats);
+        const double cot  = juce::jlimit (0.25, 0.75, (localBeat - a.tBeats) / span);
+        const double chordMid = 0.5 * (a.valueNormalized + b.valueNormalized);
+        pts[(size_t) i].curve.offsetT = cot;
+        pts[(size_t) i].curve.offsetV = valueForY (e.y) - chordMid;
     }
 
     region->setCcLane (ccNumber_, channel_, pts);
@@ -454,17 +432,11 @@ void CcLane::showSelectorMenu (juce::Point<int> screenPos)
 
 void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
 {
-    juce::PopupMenu curveMenu;
-    curveMenu.addItem (100, "Linear");
-    curveMenu.addItem (101, "Exponential");
-    curveMenu.addItem (102, "Super-ellipse");
-    curveMenu.addItem (103, "Vital");
-    curveMenu.addItem (104, "Logarithmic");
-    curveMenu.addItem (105, "Pulse / step");
-
+    /* Curve shape is the 2D bend handle now (drag the segment line), so the
+     * discrete-algorithm submenu is gone -- only delete + straighten. */
     juce::PopupMenu menu;
     menu.addItem (1, "Delete point");
-    menu.addSubMenu ("Segment curve", curveMenu);
+    menu.addItem (2, "Straighten segment after this point");
 
     const int result = menu.showAt (juce::Rectangle<int> (screenPos.x, screenPos.y, 1, 1));
     if (result <= 0) return;
@@ -478,19 +450,10 @@ void CcLane::showPointMenu (int pointIndex, juce::Point<int> screenPos)
     {
         pts.erase (pts.begin() + (long) pointIndex);
     }
-    else
+    else if (result == 2)
     {
-        CurveAlgorithm algo = CurveAlgorithm::Linear;
-        switch (result)
-        {
-            case 101: algo = CurveAlgorithm::Exponent;     break;
-            case 102: algo = CurveAlgorithm::SuperEllipse; break;
-            case 103: algo = CurveAlgorithm::Vital;        break;
-            case 104: algo = CurveAlgorithm::Logarithmic;  break;
-            case 105: algo = CurveAlgorithm::Pulse;        break;
-            default:  algo = CurveAlgorithm::Linear;       break;
-        }
-        pts[(size_t) pointIndex].curve.algorithm = algo;
+        pts[(size_t) pointIndex].curve.offsetT = 0.5;
+        pts[(size_t) pointIndex].curve.offsetV = 0.0;
     }
 
     region->setCcLane (ccNumber_, channel_, pts);

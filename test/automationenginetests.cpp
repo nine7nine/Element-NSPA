@@ -18,7 +18,6 @@ using element::dsp::automation::AutomationMode;
 using element::dsp::automation::AutomationPoint;
 using element::dsp::automation::AutomationRegion;
 using element::dsp::automation::AutomationTrack;
-using element::dsp::automation::CurveAlgorithm;
 
 namespace {
 
@@ -62,8 +61,8 @@ std::unique_ptr<AutomationTrack> makeTrackWithLinearRegion (double regionStart,
     region->positionBeats = regionStart;
     region->lengthBeats   = regionLen;
     AutomationRegion::PointList pts {
-        { 0.0,        startVal, { CurveAlgorithm::Linear, 0.0 } },
-        { regionLen,  endVal,   { CurveAlgorithm::Linear, 0.0 } }
+        { 0.0,        startVal, { } },   // default handle = straight chord
+        { regionLen,  endVal,   { } }
     };
     region->setPoints (pts);
     track->addRegion (std::move (region));

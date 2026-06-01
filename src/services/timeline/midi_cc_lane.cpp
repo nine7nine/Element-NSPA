@@ -17,8 +17,8 @@ const juce::Identifier kCcChanAttr { "ch" };
 const juce::Identifier kPointTag   { "p" };
 const juce::Identifier kPtTAttr    { "t" };   // tBeats (region-local)
 const juce::Identifier kPtVAttr    { "v" };   // valueNormalized
-const juce::Identifier kPtAlgAttr  { "ca" };  // curve algorithm (enum int)
-const juce::Identifier kPtCurvAttr { "cv" };  // curviness
+const juce::Identifier kPtCotAttr  { "cot" }; // bend handle X (0.25..0.75)
+const juce::Identifier kPtCovAttr  { "cov" }; // bend handle value offset
 } // namespace
 
 double MidiCcLane::valueAtBeats (double localBeats) const noexcept
@@ -49,14 +49,10 @@ double MidiCcLane::valueAtBeats (double localBeats) const noexcept
     if (span <= 0.0) return to.valueNormalized;
 
     const double xNorm = (localBeats - from.tBeats) / span;
-    const double yNorm = dsp::automation::evaluate (
-        xNorm, from.curve, from.valueNormalized > to.valueNormalized);
-    /* Map onto [lo, hi] -- evaluate() is value-normalised (0 = lower
-     * endpoint, 1 = higher), so the naive from + yn*(to-from) reverses
-     * descending segments.  Matches AutomationRegion::sampleAtBeats. */
-    const double lo = std::min (from.valueNormalized, to.valueNormalized);
-    const double hi = std::max (from.valueNormalized, to.valueNormalized);
-    return lo + yNorm * (hi - lo);
+    /* evaluateSegment returns the actual value directly (value-space 2D
+     * Bezier), matching AutomationRegion::sampleAtBeats. */
+    return dsp::automation::evaluateSegment (
+        xNorm, from.valueNormalized, to.valueNormalized, from.curve);
 }
 
 int MidiCcLane::ccValueAtBeats (double localBeats) const noexcept
@@ -77,11 +73,11 @@ juce::ValueTree MidiCcLane::toValueTree() const
         juce::ValueTree pv (kPointTag);
         pv.setProperty (kPtTAttr, p.tBeats,          nullptr);
         pv.setProperty (kPtVAttr, p.valueNormalized, nullptr);
-        /* Curve defaults (Linear / curviness 0) are sparse-skipped. */
-        if (p.curve.algorithm != dsp::automation::CurveAlgorithm::Linear)
-            pv.setProperty (kPtAlgAttr, (int) p.curve.algorithm, nullptr);
-        if (p.curve.curviness != 0.0)
-            pv.setProperty (kPtCurvAttr, p.curve.curviness, nullptr);
+        /* Curve defaults (centred handle) are sparse-skipped. */
+        if (p.curve.offsetT != 0.5)
+            pv.setProperty (kPtCotAttr, p.curve.offsetT, nullptr);
+        if (p.curve.offsetV != 0.0)
+            pv.setProperty (kPtCovAttr, p.curve.offsetV, nullptr);
         v.appendChild (pv, nullptr);
     }
     return v;
@@ -103,9 +99,8 @@ MidiCcLane MidiCcLane::fromValueTree (const juce::ValueTree& v)
         dsp::automation::AutomationPoint p;
         p.tBeats          = (double) pv.getProperty (kPtTAttr, 0.0);
         p.valueNormalized = (double) pv.getProperty (kPtVAttr, 0.0);
-        p.curve.algorithm = (dsp::automation::CurveAlgorithm)
-            (int) pv.getProperty (kPtAlgAttr, (int) dsp::automation::CurveAlgorithm::Linear);
-        p.curve.curviness = (double) pv.getProperty (kPtCurvAttr, 0.0);
+        p.curve.offsetT = (double) pv.getProperty (kPtCotAttr, 0.5);
+        p.curve.offsetV = (double) pv.getProperty (kPtCovAttr, 0.0);
         lane.points.push_back (p);
     }
     std::sort (lane.points.begin(), lane.points.end(),

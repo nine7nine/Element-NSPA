@@ -3,67 +3,52 @@
 
 #pragma once
 
-#include <cstdint>
-
 namespace element::dsp::automation {
 
-/** Algorithmic curve families used by the automation engine + piano-
- *  roll CC lanes.  Each algorithm interprets `curviness` differently
- *  (per-family bound + sign convention); see `evaluate` for the
- *  derivation.  Math reimplemented from Zrythm's `src/dsp/curve.cpp`
- *  (LicenseRef-Zrythm); pure functions, no code copied.
- *
- *  Why algorithmic over fixed Bezier handles: gives the user a wider
- *  expressive palette without exposing two-handle drag UX, and stays
- *  cheap at audio rate (single std::pow / expm1 / logf per sample). */
-enum class CurveAlgorithm : std::uint8_t
-{
-    Linear = 0,    /**< Straight ramp.  Equivalent to Exponent + curviness=0
-                     *   but called out explicitly so the default case in
-                     *   the dispatch is a free fall-through. */
-    Exponent,      /**< y = x^n.  n derived from curviness via
-                     *   EXPONENT_CURVINESS_BOUND.  Classic ease-in / ease-out. */
-    SuperEllipse,  /**< y = 1 - (1 - x^n)^(1/n).  From the Tracktion engine.
-                     *   Smoother shoulder than pure exponent. */
-    Vital,         /**< (e^(nx) - 1) / (e^n - 1).  From the Vital synth's
-                     *   modulation matrix.  Asymmetric exponential -- more
-                     *   musical than Exponent for many sweeps. */
-    Logarithmic,   /**< Ardour-style log curve.  Useful for filter / pitch
-                     *   sweeps where the perceived rate of change should be
-                     *   constant in log-frequency. */
-    Pulse,         /**< Hard step at (1 + curviness)/2.  Effectively a
-                     *   stepped automation segment. */
-};
-
 /** Per-segment curve descriptor stored on each AutomationPoint.  The
- *  curve describes the shape FROM this point TO the next point in
- *  time order. */
+ *  curve describes the shape FROM this point TO the next point in time
+ *  order.
+ *
+ *  This is the SAME 2D draggable-handle model the audio-clip volume
+ *  envelope uses (EnvelopePoint.curveOffsetT / curveOffsetDb), unified
+ *  here so the timeline automation overlay + piano-roll CC lanes shape
+ *  curves exactly like the volume envelope (a quadratic Bezier you bend
+ *  by dragging a handle in 2D), instead of the old algorithmic 1D
+ *  "curviness" families (removed).
+ *
+ *    offsetT  -- normalised X of the bend handle within the segment,
+ *                in [0.25, 0.75] (clamped at the UI layer; outside that
+ *                the quadratic Bezier's x(u) goes non-monotonic).
+ *                0.5 == handle horizontally centred.
+ *    offsetV  -- normalised VALUE offset of the handle from the chord
+ *                midpoint (NOT a fraction of the segment): positive
+ *                bulges the curve UP, negative DOWN, regardless of
+ *                whether the segment rises or falls -- matching the
+ *                volume envelope's "drag up = bulge up" feel.
+ *
+ *  Defaults (0.5, 0.0) == handle on the straight chord == linear.
+ *
+ *  POD / trivially-copyable so vectors of AutomationPoint stay cheap. */
 struct CurveOptions
 {
-    CurveAlgorithm algorithm { CurveAlgorithm::Linear };
-    /** Curve "amount" in [-1, +1].  Sign chooses convex vs concave
-     *  (per-algorithm convention); magnitude scales by the algorithm's
-     *  curviness bound.  curviness=0 is always equivalent to Linear
-     *  regardless of algorithm. */
-    double         curviness { 0.0 };
+    double offsetT { 0.5 };
+    double offsetV { 0.0 };
 };
 
-/* Per-algorithm curviness bounds -- match Zrythm's so curves saved by
- * either tool look identical at the same curviness value. */
-inline constexpr double kSuperEllipseCurvinessBound = 0.82;
-inline constexpr double kExponentCurvinessBound     = 0.95;
-inline constexpr double kVitalCurvinessBound        = 1.00;
-
-/** Sample the curve at normalised x in [0, 1] and return normalised y
- *  in [0, 1].
+/** Sample the segment curve at normalised x in [0, 1] and return the
+ *  actual normalised VALUE in [0, 1].
  *
- *  @param x  Position along the segment, 0 = start, 1 = end.  Clamped
- *            to [0, 1] -- callers don't need to pre-clamp.
- *  @param opts  Curve shape + amount.
- *  @param startHigher  True when the segment starts at a higher value
- *            than it ends (i.e. the segment is a descent).  Controls
- *            the curve's reflection so the same `curviness` reads as
- *            the same "shape" whether the segment rises or falls. */
-double evaluate (double x, CurveOptions opts, bool startHigher) noexcept;
+ *  @param x    Position along the segment, 0 = from-point, 1 = to-point.
+ *              Clamped internally.
+ *  @param v0   from-point value (normalised [0, 1]).
+ *  @param v1   to-point value   (normalised [0, 1]).
+ *  @param opts Bend-handle offsets.
+ *
+ *  Default handle (0.5, 0) returns the straight lerp v0..v1.  A bent
+ *  handle evaluates the value-space quadratic Bezier with endpoints
+ *  (0, v0), (1, v1) and control point derived so the curve passes
+ *  through (offsetT, 0.5*(v0+v1) + offsetV) at Bezier parameter u=0.5 --
+ *  identical to paintVolumeEnvelope's construction. */
+double evaluateSegment (double x, double v0, double v1, CurveOptions opts) noexcept;
 
 } // namespace element::dsp::automation
