@@ -799,12 +799,16 @@ public:
                     return;
                 }
 
-                /* Slope grab: clicking anywhere along the curve line (not
-                 * just the tiny midpoint handle) grabs that segment and
-                 * drags to shape it.  Right-click = reset to straight.
-                 * To ADD a point, double-click (mouseDoubleClick) -- a
-                 * single click never spawns a point, so a near-miss can't
-                 * litter the curve with junk breakpoints. */
+                /* Shape grab: clicking anywhere along the drawn curve grabs
+                 * that segment and drags to bend it -- exactly like the
+                 * automation overlay.  envSegmentLineHitAt samples the real
+                 * painted bezier (not the straight chord), so the visible
+                 * line is grabbable even where a bent/curved segment bulges
+                 * away from its chord (the steep fade-in/out segments at the
+                 * clip ends bend most -- testing only the chord left their
+                 * mid-slope handle ungrabbable).  Right-click = reset to
+                 * straight.  To ADD a point, double-click -- a single click
+                 * never spawns one, so a near-miss can't litter the curve. */
                 const int segIdx = envSegmentLineHitAt (laneIdx, r, e.x, e.y);
                 if (segIdx >= 0)
                 {
@@ -1206,69 +1210,82 @@ public:
         return -1;
     }
 
+    /** Pixel position on segment `i`'s DRAWN curve at parameter u in
+     *  [0,1].  Replicates paintVolumeEnvelope's pushSegment exactly so a
+     *  hit-test against the sampled curve lands on what the user sees --
+     *  including the horizontal+vertical bend of a shaped segment. */
+    juce::Point<float> envCurvePx (const Region& r, size_t i, double u,
+                                   const Rectangle<int>& body) const noexcept
+    {
+        constexpr float kTopDb = 6.0f, kBotDb = -24.0f;
+        const int yPad = 3;
+        const int H = juce::jmax (1, body.getHeight() - yPad * 2);
+        const auto& a = r.volumeEnvelope[i];
+        const auto& b = r.volumeEnvelope[i + 1];
+
+        double xLocal, yLocal;
+        const bool useBezier = (a.curveOffsetT != 0.5f) || (a.curveOffsetDb != 0.0f);
+        if (useBezier)
+        {
+            const double cot = (double) juce::jlimit (0.25f, 0.75f, a.curveOffsetT);
+            const double cx  = 2.0 * cot - 0.5;
+            const double chordMidDb = 0.5 * ((double) a.gainDb + (double) b.gainDb);
+            const double pinDb = chordMidDb + (double) a.curveOffsetDb;
+            const double cy  = 2.0 * pinDb - chordMidDb;
+            const double om  = 1.0 - u;
+            xLocal = 2.0 * om * u * cx + u * u;
+            yLocal = om * om * (double) a.gainDb
+                   + 2.0 * om * u * cy
+                   + u * u * (double) b.gainDb;
+        }
+        else
+        {
+            double shaped = u;
+            if (a.curve == EnvelopeCurve::Exponential)   shaped = u * u;
+            else if (a.curve == EnvelopeCurve::Smooth)
+                shaped = 0.5 - 0.5 * std::cos (juce::MathConstants<double>::pi * u);
+            xLocal = u;
+            yLocal = (double) a.gainDb + shaped * ((double) b.gainDb - (double) a.gainDb);
+        }
+
+        const double beat = a.beatOffset + xLocal * (b.beatOffset - a.beatOffset);
+        const float px = body.getX()
+            + (float) (juce::jlimit (0.0, 1.0, beat / juce::jmax (1e-9, r.lengthBeats))
+                       * (double) body.getWidth());
+        const float t  = juce::jlimit (0.0f, 1.0f,
+            (kTopDb - (float) yLocal) / (kTopDb - kBotDb));
+        const float py = body.getY() + yPad + t * (float) H;
+        return { px, py };
+    }
+
     /** Hit-test for the curve LINE itself: the index of the left
-     *  breakpoint of the segment whose drawn chord passes within
-     *  ~6 px of (x, y), or -1.  Lets the user grab a slope anywhere
-     *  along it (not just the tiny midpoint handle) to shape it.
-     *  Approximates curved segments by their chord -- close enough
-     *  for a hit band, and the common case is straight segments. */
-    static constexpr float kEnvLineGrabPx = 6.0f;
+     *  breakpoint of the segment whose DRAWN curve passes within the grab
+     *  band of (x, y), or -1.  Samples the actual painted bezier (not the
+     *  straight chord) so a bent segment is grabbable along its visible
+     *  bulge -- matches the automation overlay's findSegmentLineNear, so
+     *  the volume envelope and overlay feel identical.  Hold segments are
+     *  excluded (a step has no slope to shape). */
+    static constexpr float kEnvLineGrabPx = 8.0f;
     int envSegmentLineHitAt (int laneIdx, const Region& r, int x, int y) const noexcept
     {
         if (r.volumeEnvelope.size() < 2) return -1;
         const auto body = regionBodyRect (laneIdx, r);
         const float fx = (float) x, fy = (float) y;
+        constexpr int kSamples = 16;
+        int    best  = -1;
+        float  bestD = 1.0e9f;
         for (size_t i = 0; i + 1 < r.volumeEnvelope.size(); ++i)
         {
-            const auto a = envPointPx (r, i,     body);
-            const auto b = envPointPx (r, i + 1, body);
-            const float vx = b.x - a.x, vy = b.y - a.y;
-            const float len2 = vx * vx + vy * vy;
-            float t = len2 > 1e-6f ? ((fx - a.x) * vx + (fy - a.y) * vy) / len2 : 0.0f;
-            t = juce::jlimit (0.0f, 1.0f, t);
-            const float projx = a.x + t * vx, projy = a.y + t * vy;
-            const float dx = fx - projx, dy = fy - projy;
-            if (dx * dx + dy * dy <= kEnvLineGrabPx * kEnvLineGrabPx)
-                return (int) i;
+            if (r.volumeEnvelope[i].curve == EnvelopeCurve::Hold) continue;
+            for (int s = 0; s <= kSamples; ++s)
+            {
+                const auto p = envCurvePx (r, i, (double) s / kSamples, body);
+                const float dx = fx - p.x, dy = fy - p.y;
+                const float d  = dx * dx + dy * dy;
+                if (d < bestD) { bestD = d; best = (int) i; }
+            }
         }
-        return -1;
-    }
-
-    /** Hit-test for per-segment midpoint handle.  Returns the index
-     *  of the LEFT breakpoint of the matching segment (i.e. the
-     *  breakpoint whose curveAmount the drag should mutate), or -1.
-     *  5 px radius.  Hold segments excluded -- no handle drawn there. */
-    int envSegmentMidHitAt (int laneIdx, const Region& r, int x, int y) const noexcept
-    {
-        if (r.volumeEnvelope.size() < 2) return -1;
-        const auto body = regionBodyRect (laneIdx, r);
-        constexpr float kTopDb = 6.0f, kBotDb = -24.0f;
-        const int yPad = 3;
-        const int H = juce::jmax (1, body.getHeight() - yPad * 2);
-        for (size_t i = 0; i + 1 < r.volumeEnvelope.size(); ++i)
-        {
-            const auto& a = r.volumeEnvelope[i];
-            const auto& b = r.volumeEnvelope[i + 1];
-            if (a.curve == EnvelopeCurve::Hold) continue;
-
-            /* Pin point coords -- match the paint maths. */
-            const double cot = (double) juce::jlimit (0.25f, 0.75f, a.curveOffsetT);
-            const double pinBeat = a.beatOffset + cot * (b.beatOffset - a.beatOffset);
-            const double chordMidDb = 0.5 * ((double) a.gainDb + (double) b.gainDb);
-            const double pinDb = chordMidDb + (double) a.curveOffsetDb;
-
-            const float mx = body.getX()
-                + (float) (pinBeat / juce::jmax (1e-9, r.lengthBeats))
-                  * (float) body.getWidth();
-            const float ty = juce::jlimit (0.0f, 1.0f,
-                (kTopDb - (float) pinDb) / (kTopDb - kBotDb));
-            const float my = body.getY() + yPad + ty * (float) H;
-
-            const float dx = (float) x - mx;
-            const float dy = (float) y - my;
-            if (dx * dx + dy * dy <= 25.0f) return (int) i;
-        }
-        return -1;
+        return (best >= 0 && bestD <= kEnvLineGrabPx * kEnvLineGrabPx) ? best : -1;
     }
 
     /** Insert a breakpoint at the clicked beat + gain.  When the
@@ -4612,8 +4629,8 @@ private:
 
     /** Pixel position of segment i's 2D bend handle (the pin the curve
      *  passes through), in curveArea space.  Mirrors the volume
-     *  envelope's envSegmentMidHitAt pin maths so the handle sits ON the
-     *  curve and drags it in 2D. */
+     *  envelope's pin maths (paintVolumeEnvelope) so the handle sits ON
+     *  the curve and drags it in 2D. */
     juce::Point<float> autoHandlePx (const dsp::automation::AutomationRegion* region,
                                      size_t i, const Rectangle<int>& curveArea) const
     {
