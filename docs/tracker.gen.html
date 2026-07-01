@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Tracker</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--tracker">Lulada &ndash; Tracker</h1>
+
+<p>This page documents the Tracker: a pattern-based MIDI sequencer built on a vendored C engine (rdybka&rsquo;s <code>vht</code>) wrapped as an internal graph node, its two playback models (single-playhead for the arrangement, per-sequence flags for the clip launcher), and the sample-accurate launch scheduler that both surfaces share.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-two-node-architecture">Two-node architecture</a></li>
+<li><a href="#2-the-vendored-vht-engine">The vendored vht engine</a></li>
+<li><a href="#3-the-trackernode-wrapper">The TrackerNode wrapper</a></li>
+<li><a href="#4-draining-the-engine-to-midi">Draining the engine to MIDI</a></li>
+<li><a href="#5-two-playback-models">Two playback models</a></li>
+<li><a href="#6-the-launch-scheduler">The launch scheduler</a></li>
+<li><a href="#7-mute-and-solo">Mute and solo</a></li>
+<li><a href="#8-undo">Undo</a></li>
+<li><a href="#9-no-song-mode-here">No song mode here</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-two-node-architecture">1. Two-node architecture</h2>
+
+<p>The tracker is deliberately split into two graph nodes rather than one monolithic &ldquo;sample tracker&rdquo;:</p>
+
+<ul>
+<li><strong><code>TrackerNode</code></strong> &ndash; pattern grid, MIDI <strong>out only</strong>.</li>
+<li><strong><code>SamplerNode</code></strong> &ndash; MIDI <strong>in</strong>, audio <strong>out</strong> (see <a href="sampler.gen.html">Sampler</a>).</li>
+</ul>
+
+
+<p>MIDI is the internal wire format between them. A &ldquo;sample track&rdquo; is just a MIDI track routed to the internal sampler &ndash; same data underneath, different UX chrome. This keeps the tracker a pure sequencer that can drive <em>anything</em> (the internal sampler, a hosted VST/CLAP synth, a MIDI tool chain), and lets the sampler be a plain instrument that does not care where its notes come from.</p>
+
+<h2 id="2-the-vendored-vht-engine">2. The vendored vht engine</h2>
+
+<p>The pattern engine is the C core of <a href="https://github.com/rdybka/vht"><code>rdybka/vht</code></a> (GPL-3), vendored under <code>src/engine/tracker/</code> and driven directly. The Python/GTK UI and the JACK/ALSA drivers are dropped; Lulada supplies its own JUCE-side driver and UI.</p>
+
+<table>
+<thead>
+<tr>
+<th> File(s) </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>module.c</code> </td>
+<td> Top-level container: holds the sequences, transport, tempo </td>
+</tr>
+<tr>
+<td> <code>sequence.c</code> </td>
+<td> One pattern: a set of tracks sharing a row length + playhead </td>
+</tr>
+<tr>
+<td> <code>track.c</code> </td>
+<td> One column of cells within a sequence </td>
+</tr>
+<tr>
+<td> <code>row.c</code> </td>
+<td> A single cell: note, velocity, and control data </td>
+</tr>
+<tr>
+<td> <code>midi_event.c</code> </td>
+<td> The engine&rsquo;s MIDI event representation </td>
+</tr>
+<tr>
+<td> <code>envelope.c</code> / <code>ctrlrow.c</code> </td>
+<td> Per-cell control / envelope data </td>
+</tr>
+<tr>
+<td> <code>midi_client.c</code> </td>
+<td> Vendored client shim (JACK plumbing replaced by the node) </td>
+</tr>
+<tr>
+<td> <code>timeline.c</code> </td>
+<td> Left as a no-op stub &ndash; Lulada does not use vht&rsquo;s song mode (see §9) </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The engine is C, so the node brackets its includes in <code>extern "C"</code> to keep C++ name mangling from breaking linking. The model nests <code>module -&gt; sequence -&gt; track -&gt; row</code>; a module can hold many sequences, and each sequence carries its own <code>playing</code> flag and playhead.</p>
+
+<blockquote><p>A wiring gotcha from bring-up: <code>sequence_new()</code> defaults <code>seq-&gt;playing = 0</code>. Without <code>sequence_set_playing(seq, 1)</code>, <code>sequence_advance</code> runs but skips <code>track_advance</code>, so no MIDI emits even when the module is playing. The two playback models below both drive that flag explicitly.</p></blockquote>
+
+<h2 id="3-the-trackernode-wrapper">3. The TrackerNode wrapper</h2>
+
+<p><code>TrackerNode</code> (<code>src/nodes/tracker.hpp</code>) is a <code>MidiFilterNode</code> that owns a <code>module*</code> and exposes it to the graph and the editor. It registers as <code>EL_NODE_ID_MIDI_SEQUENCER</code>, with zero audio channels and a MIDI output port. On first <code>prepareToRender</code> it calls <code>installDefaultPattern()</code> to build an empty valid module (2 tracks, 16 rows, no notes).</p>
+
+<p>All engine access is serialised by an internal <code>juce::CriticalSection engineLock_</code>. The editor reads pattern state under <code>engineLock()</code>; the audio thread advances the engine under the same lock inside <code>render()</code>. Because the lock is a <code>juce::CriticalSection</code>, it is PI-correct on PREEMPT_RT, and the calls that take it from the message thread (UI clicks, the 30 Hz poll) are infrequent enough that contention with the audio thread is negligible.</p>
+
+<p>State round-trips through <code>getState</code> / <code>setState</code> as a serialised blob, which is also the unit of undo (see §8).</p>
+
+<h2 id="4-draining-the-engine-to-midi">4. Draining the engine to MIDI</h2>
+
+<p>vht originally flushed events to JACK ports in <code>jack_process.c</code>; <code>TrackerNode</code> replaces that with <strong><code>drainEngineToMidi</code></strong>. Each block, under <code>engineLock_</code>, the node advances the engine over <code>numSamples</code>, then drains every emitted event out of the engine&rsquo;s per-track output buffers into the node&rsquo;s per-port JUCE <code>MidiBuffer</code>s, time-sorted. When multiple sequences are playing concurrently (the clip-launcher case), all of their events land in the shared per-port buffer and are sorted together &ndash; so several launched clips play in sample-aligned time.</p>
+
+<h2 id="5-two-playback-models">5. Two playback models</h2>
+
+<p><code>TrackerNode</code> supports two <em>distinct</em> ways to drive playback, used by the two surfaces:</p>
+
+<table>
+<thead>
+<tr>
+<th> Model </th>
+<th> Primitive </th>
+<th> Playheads </th>
+<th> Used by </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Pattern-switch </td>
+<td> <code>advanceToPattern(idx)</code> </td>
+<td> One (<code>curr_seq</code>) </td>
+<td> Arrangement view </td>
+</tr>
+<tr>
+<td> Per-sequence flag </td>
+<td> <code>setSequencePlaying(idx, on)</code> </td>
+<td> Many (concurrent) </td>
+<td> Session View clip launcher </td>
+</tr>
+</tbody>
+</table>
+
+
+<ul>
+<li><strong>Pattern-switch</strong> moves the single <code>curr_seq</code> playhead to a chosen pattern at the next buffer boundary &ndash; classic tracker &ldquo;jump to pattern N&rdquo;. <code>currentPatternIndex()</code> / <code>numPatterns()</code> let the arrangement view highlight the active block.</li>
+<li><strong>Per-sequence flags</strong> flip an individual sequence&rsquo;s <code>playing</code> flag without touching <code>curr_seq</code>, so multiple sequences in one module can play at once. <code>module_advance</code> iterates all of them. Launching a clip rewinds that sequence <em>and all its tracks</em> to row 0 &ndash; matching Ableton/Bitwig &ldquo;launch restarts from the start&rdquo;.</li>
+</ul>
+
+
+<p>The session-view model adds edge-detection helpers for follow-actions: <code>sequenceWrappedSinceLastQuery(idx)</code> returns true once per playhead wrap (consumed on read), and <code>getSequenceLengthBeats(idx)</code> lets the arrangement schedule region cutoffs for non-looped tracker regions.</p>
+
+<h2 id="6-the-launch-scheduler">6. The launch scheduler</h2>
+
+<p>Both surfaces launch clips through one sample-accurate scheduler, <code>schedulePlaying(sequenceIdx, beatTarget, wantPlaying)</code>. It is a <strong>lock-free SPSC FIFO</strong> from the message thread to the audio thread, so a UI click never touches <code>engineLock_</code>:</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 900 260" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.5; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln  { stroke: #7dcfff; stroke-width: 1.5; fill: none; }
+    .title { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="900" height="260" class="bg" rx="6"/>
+  <text x="450" y="24" text-anchor="middle" class="title">schedulePlaying -- message thread to audio thread, no lock</text>
+
+  <rect x="30" y="46" width="250" height="70" class="grn" rx="6"/>
+  <text x="48" y="66" class="lbl-grn">Message thread</text>
+  <text x="48" y="86" class="lbl-mut">clip bang -> schedulePlaying(</text>
+  <text x="48" y="100" class="lbl-mut">  seqIdx, beatTarget, wantPlaying)</text>
+
+  <rect x="330" y="52" width="240" height="58" class="box" rx="6"/>
+  <text x="450" y="74" text-anchor="middle" class="lbl-sm">64-slot AbstractFifo</text>
+  <text x="450" y="90" text-anchor="middle" class="lbl-mut">LaunchReq{seqIdx, beat, want}</text>
+  <text x="450" y="103" text-anchor="middle" class="lbl-mut">full -> new request dropped</text>
+
+  <rect x="620" y="46" width="250" height="70" class="hot" rx="6"/>
+  <text x="638" y="66" class="lbl-yel">Audio thread (render)</text>
+  <text x="638" y="86" class="lbl-mut">drainLaunchFifo -> PendingAction[seqIdx]</text>
+  <text x="638" y="100" class="lbl-mut">latest per seqIdx wins (implicit cancel)</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="280" y1="81" x2="330" y2="81" class="ln"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="570" y1="81" x2="620" y2="81" class="ln"/>
+
+  <rect x="30" y="140" width="840" height="90" class="box" rx="6"/>
+  <text x="50" y="162" class="lbl-sm">applyPendingForBlock(blockStartBeat, blockEndBeat)</text>
+  <text x="50" y="182" class="lbl-mut">beatTarget &lt; 0   -> fire at the start of the next render block (immediate)</text>
+  <text x="50" y="198" class="lbl-mut">beatTarget &gt;= 0  -> fire in the block whose beat range contains it (+/- one block)</text>
+  <text x="50" y="214" class="lbl-mut">clips targeting the same beat flip together -> zero inter-clip skew</text>
+</svg>
+</div>
+
+
+<p>Each block, before advancing the engine, the audio thread drains the FIFO into a per-sequence <code>PendingAction</code> table (indexed by <code>sequenceIdx</code>) and then applies any pending flip whose target beat falls in this block. Because the table keeps only the <strong>latest</strong> request per sequence, re-banging a queued clip cancels the prior request for free. A 64-slot FIFO at human click rate never fills; if it somehow did, the new request is dropped silently rather than blocking.</p>
+
+<h2 id="7-mute-and-solo">7. Mute and solo</h2>
+
+<p>Session-view mute/solo state lives on the node (<code>getUserMuted</code> / <code>setUserMuted</code>, <code>getSoloed</code> / <code>setSoloed</code>) so both the Session View and the tracker editor popup show one consistent state. These are <em>user intent</em>; the effective engine mute (<code>Processor::isMuted</code>) is reconciled by the Session View: when any tracker is soloed, non-soloed trackers get <code>setMuted(true)</code>; otherwise each falls back to <code>setMuted(getUserMuted())</code>.</p>
+
+<h2 id="8-undo">8. Undo</h2>
+
+<p>The node keeps its own memento stacks: <code>pushUndo()</code> snapshots the whole module state (the same wire format as <code>getState</code>) onto a stack capped at 64 entries, with a matching redo stack. The editor calls <code>pushUndo()</code> before any mutation.</p>
+
+<p>To integrate with the app-wide undo, the node exposes an <code>onPushUndo</code> callback. The <code>TrackerEditor</code> binds it to push a bridge <code>UndoableAction</code> into the global <code>GuiService</code> <code>UndoManager</code>, so Cmd+Z / Cmd+Shift+Z unwind tracker edits alongside graph, arrangement, and session-view edits. Local undo/redo remain the source of truth for the state mementos; the bridge action just delegates back to <code>TrackerNode::undo()</code> / <code>redo()</code>.</p>
+
+<h2 id="9-no-song-mode-here">9. No song mode here</h2>
+
+<p>The tracker is intentionally <strong>not</strong> a song sequencer. vht&rsquo;s <code>timeline.c</code> (its per-slot order-list) is left as a no-op stub. The linear song role belongs to the polymorphic <a href="arrangement-timeline.gen.html">Arrangement</a> view, which can host tracker <em>regions</em> (referencing vht sequences) on a timeline lane and drive them through the same <code>schedulePlaying</code> path. That keeps one song model for the whole DAW instead of two competing ones.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

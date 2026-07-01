@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Wayland Embedding</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--wayland-embedding">Lulada &ndash; Wayland Embedding</h1>
+
+<p>This page documents Lulada&rsquo;s experimental Wayland windowing path: how the app owns one <code>wl_display</code> that the Wine graphics driver adopts as a guest, how Win32 plugin editor windows embed into the host window as <code>wl_subsurface</code>s, the two-reader event-loop discipline that keeps both JUCE and Wine dispatching, and how it all falls back to X11.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-all-or-nothing-per-session">All-or-nothing per session</a></li>
+<li><a href="#2-host-and-guest">Host and guest</a></li>
+<li><a href="#3-display-injection">Display injection</a></li>
+<li><a href="#4-subsurface-plugin-embed">Subsurface plugin embed</a></li>
+<li><a href="#5-two-coordinated-readers">Two coordinated readers</a></li>
+<li><a href="#6-lessons-that-shaped-the-design">Lessons that shaped the design</a></li>
+<li><a href="#7-x11-fallback">X11 fallback</a></li>
+<li><a href="#8-where-the-pieces-live">Where the pieces live</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-all-or-nothing-per-session">1. All-or-nothing per session</h2>
+
+<p>A Lulada session runs <strong>either</strong> all-Wayland <strong>or</strong> all-X11 &ndash; never a hybrid of a Wayland main window with X11-embedded plugin windows. Wine&rsquo;s graphics-driver model assumes one coherent backend per process, and the mixed mode trips a wineserver process-death cleanup path that injects an uninterceptable <code>WM_CLOSE</code> into the desktop window.</p>
+
+<p>So the rule is: any Wayland-direction rendering must terminate <em>inside</em> <code>winewayland.drv</code>, not <code>winex11.drv</code> via Xwayland. <code>winex11.drv</code> stays for X11 sessions; the user picks one stack at startup. Wayland support is enabled by compiling <code>element_app</code> with <code>JUCE_WAYLAND=1</code> (set in <code>CMakeLists.txt</code> for <code>UNIX AND NOT APPLE</code>) and is chosen at runtime &ndash; the app uses Wayland surfaces when <code>WAYLAND_DISPLAY</code> is present and falls back to X11 when it is not.</p>
+
+<h2 id="2-host-and-guest">2. Host and guest</h2>
+
+<p>The key inversion from a normal Wine session is who owns the Wayland connection:</p>
+
+<ul>
+<li><strong>Lulada is the host.</strong> Its JUCE-NSPA layer connects to the compositor, owns the <code>wl_display</code>, and drives the Wayland event loop. The main window, dialogs, popups, and native node editors are all host-side Wayland surfaces.</li>
+<li><strong><code>winewayland.drv</code> is a guest.</strong> Instead of opening its own connection, it <em>adopts</em> the host&rsquo;s <code>wl_display</code> and uses it only to render plugin surfaces, binding globals on Wine&rsquo;s own event queue.</li>
+</ul>
+
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 900 430" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .cy  { fill: #16242b; stroke: #7dcfff; stroke-width: 1.5; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .sys { fill: #1f2535; stroke: #565f89; stroke-width: 1; }
+    .lbl  { fill: #c0caf5; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-cy  { fill: #7dcfff; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln  { stroke: #7dcfff; stroke-width: 1.5; fill: none; }
+    .title { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="900" height="430" class="bg" rx="6"/>
+  <text x="450" y="24" text-anchor="middle" class="title">Host owns the wl_display; the Wine driver is a guest</text>
+
+  <rect x="30" y="44" width="410" height="150" class="grn" rx="6"/>
+  <text x="48" y="64" class="lbl-grn">Lulada (host)  --  JUCE-NSPA</text>
+  <rect x="48" y="76" width="374" height="30" class="box" rx="6"/>
+  <text x="235" y="95" text-anchor="middle" class="lbl-sm">owns wl_display + subcompositor + event loop</text>
+  <rect x="48" y="112" width="180" height="30" class="box" rx="6"/>
+  <text x="138" y="131" text-anchor="middle" class="lbl-mut">main window surface</text>
+  <rect x="242" y="112" width="180" height="30" class="box" rx="6"/>
+  <text x="332" y="131" text-anchor="middle" class="lbl-mut">dialogs / popups</text>
+  <rect x="48" y="148" width="374" height="30" class="box" rx="6"/>
+  <text x="235" y="167" text-anchor="middle" class="lbl-mut">WaylandMessageLoop reads default queue around poll()</text>
+
+  <rect x="460" y="44" width="410" height="150" class="cy" rx="6"/>
+  <text x="478" y="64" class="lbl-cy">winewayland.drv (guest)</text>
+  <rect x="478" y="76" width="374" height="30" class="box" rx="6"/>
+  <text x="665" y="95" text-anchor="middle" class="lbl-sm">adopts host wl_display; binds on Wine's own queue</text>
+  <rect x="478" y="112" width="374" height="30" class="box" rx="6"/>
+  <text x="665" y="131" text-anchor="middle" class="lbl-mut">plugin editor surface -> wl_subsurface of host window</text>
+  <rect x="478" y="148" width="374" height="30" class="box" rx="6"/>
+  <text x="665" y="167" text-anchor="middle" class="lbl-mut">read_events thread dispatches Wine's own queue</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="440" y1="91" x2="460" y2="91" class="ln"/>
+
+  <rect x="30" y="220" width="840" height="30" class="box" rx="6"/>
+  <text x="450" y="239" text-anchor="middle" class="lbl-sm">libwayland prepare_read / read_events barrier -- two readers, two queues</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="450" y1="250" x2="450" y2="278" class="ln"/>
+
+  <rect x="30" y="280" width="840" height="40" class="sys" rx="6"/>
+  <text x="450" y="304" text-anchor="middle" class="lbl-mut">Wayland compositor (kwin / mutter / ...)  --  single connection, single client</text>
+
+  <rect x="30" y="342" width="840" height="70" class="box" rx="6"/>
+  <text x="50" y="362" class="lbl-sm">Gated by launcher env WINE_NSPA_WAYLAND_HOST=1</text>
+  <text x="50" y="380" class="lbl-mut">Unset  -> upstream Wine; winewayland.drv opens its own connection (standalone works)</text>
+  <text x="50" y="396" class="lbl-mut">Set    -> host mode: driver defers its connect and adopts the host display instead</text>
+</svg>
+</div>
+
+
+<p>The whole guest path is gated behind the launcher environment variable <strong><code>WINE_NSPA_WAYLAND_HOST=1</code></strong>. Unset, Wine behaves exactly as upstream (it opens its own connection, so standalone Wine apps still work); set, <code>wayland_process_init</code> <em>defers</em> &ndash; it does not connect &ndash; and <code>wayland_ensure_init</code> lazily adopts the host display when it arrives.</p>
+
+<h2 id="3-display-injection">3. Display injection</h2>
+
+<p>The host has to hand its <code>wl_display</code> pointer to the guest driver. This is done through an environment variable, <strong><code>WINE_NSPA_WAYLAND_DISPLAY</code></strong>, rather than a Wine unix-call, because timing matters: <code>winewayland.drv</code>&rsquo;s <code>DllMain</code> runs <code>wl_display_connect</code> the instant the DLL loads, which loses a race against any later injection call. Reading the pointer from the environment at init sidesteps the race, and the value is PID-guarded so child Wine processes ignore an inherited value.</p>
+
+<p>On <code>main</code>, this injection was moved out of the app code and <strong>into the JUCE-NSPA layer</strong> (JUCE publishes the display when it creates the host connection), so the Element-side delta is just the <code>JUCE_WAYLAND=1</code> compile definition. The Wine-side handshake messages are registered window messages <code>WM_WAYLANDDRV_NSPA_EMBED_WINDOW</code> / <code>_DONE</code> (<code>0x80001006</code> / <code>0x80001007</code>), which fall inside the <code>0x80001000</code>-<code>0x80001fff</code> range covered by Wine-NSPA&rsquo;s driver-message fast path.</p>
+
+<h2 id="4-subsurface-plugin-embed">4. Subsurface plugin embed</h2>
+
+<p>When a hosted plugin opens its editor, the JUCE <code>WineHWNDEmbedComponent</code> (Wayland branch) and the Wine driver cooperate to make the plugin&rsquo;s top-level window a <strong><code>wl_subsurface</code></strong> of Lulada&rsquo;s host window, so the editor renders <em>inside</em> the graph&rsquo;s plugin window rather than as a detached top-level.</p>
+
+<p>The subtle part &ndash; and a bug that was fixed during bring-up &ndash; is that Wayland only adds and maps a subsurface on the <strong>parent surface&rsquo;s next commit</strong>. X11&rsquo;s <code>XReparent</code> is immediate and has no analog. So the embed handler must commit <em>both</em> the new child surface and the foreign parent surface after <code>get_subsurface</code>; committing only the child leaves the editor black and detached. This mirrors what JUCE&rsquo;s own <code>WaylandWindowSystem::createWindow</code> does for native surfaces.</p>
+
+<h2 id="5-two-coordinated-readers">5. Two coordinated readers</h2>
+
+<p>A live session has <strong>two</strong> threads reading the same Wayland connection, each dispatching a <em>different</em> event queue:</p>
+
+<table>
+<thead>
+<tr>
+<th> Reader </th>
+<th> Queue </th>
+<th> Runs when </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> JUCE <code>WaylandMessageLoop</code> </td>
+<td> default queue </td>
+<td> around the message thread&rsquo;s <code>poll()</code> (<code>prepareWaylandFd</code> / <code>processWaylandFd</code>) </td>
+</tr>
+<tr>
+<td> Wine <code>read_events</code> thread </td>
+<td> Wine&rsquo;s own queue </td>
+<td> continuously, even while a Win32 modal loop is up </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>They coexist through libwayland&rsquo;s <code>prepare_read</code> / <code>read_events</code> barrier and never handle each other&rsquo;s events. This two-reader shape is deliberate and matches how <code>winex11.drv</code> reads X11 independently of JUCE. In host mode Wine keeps its <code>read_events</code> thread (it waits for the deferred adopt, then dispatches its own queue); only the clipboard thread stays host-gated off.</p>
+
+<p>The one hard rule: <strong>the fd callback in <code>juce_WaylandWindowSystem.cpp</code> must stay a no-op</strong> &ndash; it must never read the fd, because JUCE already reads around <code>poll()</code>. Reading it there duplicates <code>prepareWaylandFd</code>&rsquo;s read within one loop iteration and deadlocks.</p>
+
+<h2 id="6-lessons-that-shaped-the-design">6. Lessons that shaped the design</h2>
+
+<p>Two freezes during bring-up produced the rules above:</p>
+
+<ul>
+<li><strong>Duplicate reader = deadlock.</strong> Adding a &ldquo;single reader&rdquo; in JUCE&rsquo;s fd callback read the fd a second time inside one loop iteration and hung the message loop. The fd callback stays empty; JUCE reads around <code>poll()</code>.</li>
+<li><strong>Sole reader breaks plugin menus.</strong> Making JUCE the <em>only</em> reader broke plugin dropdown menus: a menu runs a modal Win32 loop (<code>TrackPopupMenu</code>) that bypasses JUCE&rsquo;s message loop entirely, so nothing read Wayland while a menu was open and the window went &ldquo;Not Responding&rdquo;. Keeping Wine&rsquo;s own reader thread fixes it &ndash; two <em>coordinated</em> readers is not the same as the duplicate-reader bug.</li>
+</ul>
+
+
+<p>A third fix is unrelated to reading: in host mode the driver initially reported zero monitors, so window DPI computed to 0 and wineserver&rsquo;s <code>scale_dpi</code> hit a divide-by-zero (<code>SIGFPE</code>). <code>WAYLAND_UpdateDisplayDevices</code> now reports a fallback 1920x1080 monitor in host mode (gated; standalone is untouched).</p>
+
+<h2 id="7-x11-fallback">7. X11 fallback</h2>
+
+<p>When <code>WAYLAND_DISPLAY</code> is absent, or the user chooses the X11 stack, the whole thing runs on <code>winex11.drv</code> with plugin editors reparented via X11 &ndash; the long-standing path. On X11 the main window and plugin windows are both X11 surfaces (under a plain X server or Xwayland), so the coherent-backend rule holds without any of the host/guest machinery. The choice is per session; there is no runtime switch.</p>
+
+<h2 id="8-where-the-pieces-live">8. Where the pieces live</h2>
+
+<p>The Wayland path spans three repositories; Lulada (this repo) carries only the thin enabling edits.</p>
+
+<table>
+<thead>
+<tr>
+<th> Piece </th>
+<th> Repo </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>JUCE_WAYLAND=1</code> + injection glue </td>
+<td> Lulada (<code>CMakeLists.txt</code>) </td>
+<td> Enable Wayland; publish the host display </td>
+</tr>
+<tr>
+<td> <code>WaylandComponentPeer</code> / <code>WaylandMessageLoop</code> / <code>WineHWNDEmbedComponent</code> </td>
+<td> JUCE-NSPA </td>
+<td> Host surfaces, the reader around <code>poll()</code>, the subsurface embed component </td>
+</tr>
+<tr>
+<td> <code>winewayland.drv</code> host-mode adopt + subsurface embed handler </td>
+<td> Wine-NSPA </td>
+<td> Guest driver: adopt the host display, embed plugin surfaces </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>See <a href="winelib-runtime.gen.html">Winelib Runtime</a> for the process this all runs inside, and <a href="architecture.gen.html">Architecture</a> for how the embedded editor sits in the graph.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

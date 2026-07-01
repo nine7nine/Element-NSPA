@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Sampler</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--sampler">Lulada &ndash; Sampler</h1>
+
+<p>This page documents the Sampler: a multi-instrument sample player built on the vendored ft2-clone mixer DSP, its FT2/Renoise instrument model (keymap, envelopes, auto-vibrato), the four-bus output, and the session-global bank pool that many sampler nodes share.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-the-ft2-clone-mixer">The FT2-clone mixer</a></li>
+<li><a href="#2-the-samplernode">The SamplerNode</a></li>
+<li><a href="#3-instruments-and-slots">Instruments and slots</a></li>
+<li><a href="#4-envelopes-and-auto-vibrato">Envelopes and auto-vibrato</a></li>
+<li><a href="#5-voices-interpolation-buses">Voices, interpolation, buses</a></li>
+<li><a href="#6-the-session-global-bank-pool">The session-global bank pool</a></li>
+<li><a href="#7-two-phase-sample-loading">Two-phase sample loading</a></li>
+<li><a href="#8-persistence">Persistence</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-the-ft2-clone-mixer">1. The FT2-clone mixer</h2>
+
+<p>The per-voice DSP is the mixer core of <a href="https://github.com/8bitbubsy/ft2-clone"><code>8bitbubsy/ft2-clone</code></a> (BSD-3-Clause), vendored under <code>src/engine/sampler/</code>. Only the mixer, interpolation, and instrument-shape bits are taken; the XM replayer, module loaders, sample loaders (JUCE&rsquo;s <code>AudioFormatManager</code> covers WAV/AIFF/FLAC/OGG), and the SDL UI are all dropped.</p>
+
+<table>
+<thead>
+<tr>
+<th> File </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>ft2_mix.c</code> / <code>ft2_mix.h</code> </td>
+<td> The voice mixer &ndash; resample + accumulate into the output </td>
+</tr>
+<tr>
+<td> <code>ft2_mix_interpolation.c/.h</code> </td>
+<td> Interpolation kernels (linear, cubic, windowed-sinc) </td>
+</tr>
+<tr>
+<td> <code>ft2_mix_simd.c</code> </td>
+<td> AVX2 SIMD mix kernel </td>
+</tr>
+<tr>
+<td> <code>ft2_mix_macros.h</code> </td>
+<td> Shared mixing macros </td>
+</tr>
+<tr>
+<td> <code>ft2_audio.h</code> </td>
+<td> Audio-side declarations </td>
+</tr>
+</tbody>
+</table>
+
+
+<h2 id="2-the-samplernode">2. The SamplerNode</h2>
+
+<p><code>SamplerNode</code> (<code>src/nodes/sampler.hpp</code>) is a <code>BaseProcessor</code>: <strong>MIDI in, stereo audio out</strong>, registered as <code>EL_NODE_ID_SAMPLER</code>. It hosts a <code>juce::Synthesiser</code> voice pool whose voices render through the ft2 mixer. MIDI channel selects the instrument (default: channel N -> bank N, remappable and updated by program-change); the sampler is a <em>consumer</em> of the shared bank pool rather than the owner of its instruments (see §6).</p>
+
+<p>It is a <code>juce::ChangeBroadcaster</code> so the editor and the Disk Op sample-bank pane can refresh when slot contents change. The editor is paged &ndash; <strong>Bank / Instrument / Sample / FX</strong> &ndash; with the four bus-gain sliders under the sample preview on the Bank page.</p>
+
+<h2 id="3-instruments-and-slots">3. Instruments and slots</h2>
+
+<p>A <code>SamplerInstrument</code> follows the FT2/Renoise model: up to <code>kNumSlots = 32</code> sample slots plus a 128-entry MIDI keymap and per-instrument envelopes.</p>
+
+<p>A <code>SamplerSampleSlot</code> holds decoded <code>int16</code> sample data (mono, or stereo when <code>data16R</code> is non-null) and its play parameters:</p>
+
+<table>
+<thead>
+<tr>
+<th> Field </th>
+<th> Meaning </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>data16L</code> / <code>data16R</code> </td>
+<td> Decoded int16 buffers (R null for mono) </td>
+</tr>
+<tr>
+<td> <code>sourceSampleRate</code> </td>
+<td> Original file rate; the mixer resamples per note </td>
+</tr>
+<tr>
+<td> <code>rootNote</code> </td>
+<td> MIDI note that plays at native pitch </td>
+</tr>
+<tr>
+<td> <code>finetune</code> / <code>relativeNote</code> </td>
+<td> Fine offset and XM-style semitone offset </td>
+</tr>
+<tr>
+<td> <code>volume</code> / <code>panning</code> </td>
+<td> Per-slot gain and pan </td>
+</tr>
+<tr>
+<td> <code>loopMode</code> </td>
+<td> <code>kNone</code> / <code>kForward</code> / <code>kPingpong</code> + <code>loopStart</code> / <code>loopLength</code> </td>
+</tr>
+<tr>
+<td> <code>busIndex</code> </td>
+<td> Which of the 4 output buses this slot feeds </td>
+</tr>
+<tr>
+<td> <code>sourceFile</code> </td>
+<td> Absolute POSIX path of the loaded file (for reload &ndash; see §8) </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The keymap (<code>slotForNote</code> / <code>setSlotForNote</code> / <code>autoSpreadKeymap</code>) maps each of the 128 MIDI notes to a slot, so one instrument can be a multisampled range.</p>
+
+<h2 id="4-envelopes-and-auto-vibrato">4. Envelopes and auto-vibrato</h2>
+
+<p>Each instrument carries two FT2-style envelopes &ndash; volume and pan &ndash; as <code>FT2Envelope</code>: up to 12 points (<code>x</code> = tick offset 0..324, <code>y</code> = 0..64) with <code>Enabled</code> / <code>Sustain</code> / <code>Loop</code> flags, a sustain point, and loop start/end. Envelope ticks run at the FT2 nominal rate (<code>kEnvTickRateHz = 50</code>); <code>getSamplesPerEnvTick()</code> converts to the current sample rate.</p>
+
+<p>Two behaviours refine the raw FT2 model for modern use:</p>
+
+<ul>
+<li><strong><code>envSampleRelative</code></strong> (default on) &ndash; at note-on, envelope ticks are scaled so the envelope&rsquo;s last point lines up with the <em>end of the playing sample</em>, instead of running in absolute 50 Hz ticks (which max out around 6.5 s and make envelopes unusable for short one-shots).</li>
+<li><strong>Global ADSR fallback</strong> &ndash; when an instrument has no volume envelope enabled, a global <code>AdsrParams</code> (attack/decay/sustain/release) shapes the voice instead; when the FT2 volume envelope&rsquo;s <code>kEnabled</code> flag is set, the ADSR is bypassed in its favour.</li>
+</ul>
+
+
+<p><code>AutoVibParams</code> adds FT2 auto-vibrato per instrument (type sine/square/ramp, sweep-in, depth, rate). Instruments can also be <code>mono</code> &ndash; one voice per channel binding, with last-note-priority pitch glide over <code>portamentoTimeMs</code>.</p>
+
+<h2 id="5-voices-interpolation-buses">5. Voices, interpolation, buses</h2>
+
+<table>
+<thead>
+<tr>
+<th> Parameter </th>
+<th> Values </th>
+<th> Default </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Voice count </td>
+<td> <code>setNumVoices(n)</code> </td>
+<td> 16 </td>
+</tr>
+<tr>
+<td> Interpolation </td>
+<td> <code>kInterpNone</code> / <code>kInterpLinear</code> / <code>kInterpCubic</code> / <code>kInterpSinc16</code> </td>
+<td> Linear </td>
+</tr>
+<tr>
+<td> Output buses </td>
+<td> <code>kNumBuses = 4</code> stereo aux outputs </td>
+<td> &ndash; </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Each slot routes to a bus (<code>busIndex</code>); the voice&rsquo;s audio is multiplied by <code>busGain[busIndex]</code> (per-bus master gain, 0..2.0, 1.0 = unity) before being summed into that bus&rsquo;s output channels. Interpolation mode and loop state pick the specific ft2 mix function via <code>getMixFuncIndexForCurrentMode(loop, pingpong)</code>.</p>
+
+<h2 id="6-the-session-global-bank-pool">6. The session-global bank pool</h2>
+
+<p>Instruments do <strong>not</strong> live on the sampler node. They live in a process-lifetime singleton, <code>SampleBankPool</code> (<code>src/services/samplebankpool.hpp</code>) &ndash; the FT2/Buzz &ldquo;bank table&rdquo; model. Multiple <code>SamplerNode</code>s in one session all reference the same pool; each picks which bank(s) it plays via a per-channel binding (<code>channelBinding[MIDI channel] -&gt; bank index</code>).</p>
+
+<table>
+<thead>
+<tr>
+<th> Aspect </th>
+<th> Detail </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Capacity </td>
+<td> <code>kNumBanks = 128</code> (matches Disk Op&rsquo;s 128-row grid) </td>
+</tr>
+<tr>
+<td> Ownership </td>
+<td> Singleton; sampler nodes are consumers, not owners </td>
+</tr>
+<tr>
+<td> Mutation UI </td>
+<td> Disk Op&rsquo;s Sample Bank pane (load / rename / clear) </td>
+</tr>
+<tr>
+<td> Growth </td>
+<td> Lazy via <code>ensureInstrumentExists</code> / <code>addInstrument</code> </td>
+</tr>
+<tr>
+<td> Notifications </td>
+<td> <code>juce::ChangeBroadcaster</code>, deferred to the message thread </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Thread safety: all public accessors take an internal lock, but the <strong>audio thread never touches it</strong> &ndash; a voice captures a <code>SamplerInstrument::Ptr</code> (ref-counted) at note-on time, so the instrument stays alive even if the message thread later reallocates the bank vector. This is the same &ldquo;hold a ref-counted snapshot across the block&rdquo; discipline used elsewhere on the realtime path.</p>
+
+<h2 id="7-two-phase-sample-loading">7. Two-phase sample loading</h2>
+
+<p>Loading a sample must not stall the audio thread or hold a lock across file I/O. <code>SamplerInstrument</code> splits it:</p>
+
+<ol>
+<li><strong><code>prepareSlot(file, fmt)</code></strong> &ndash; the UI thread does the file read + decode into a fresh <code>SamplerSampleSlot</code>, holding <strong>no</strong> sampler-side lock. Returns null on read failure.</li>
+<li><strong><code>commitSlot(slot, data)</code></strong> &ndash; publishes the prepared slot into the instrument under a brief <code>SamplerNode::sampleLock</code>.</li>
+</ol>
+
+
+<p>So the expensive work (decode) happens lock-free, and only the pointer publish is guarded. <code>clear()</code> / <code>clearSlot()</code> give index-stable &ldquo;empty this bank/slot&rdquo; semantics for the Disk Op pane&rsquo;s fixed 128-row table.</p>
+
+<h2 id="8-persistence">8. Persistence</h2>
+
+<p>Sessions serialise the bank table through <code>getStateInformation</code> / <code>setStateInformation</code>, and <code>clearAll()</code> resets the pool on session-new / session-load. Crucially, the decoded <code>int16</code> buffers are <strong>never embedded</strong> in the session XML &ndash; only each slot&rsquo;s <code>sourceFile</code> path is stored, and the audio is re-decoded from disk on load. The sampler node persists its per-channel bindings; the banks themselves belong to the pool. See <a href="graph-engine.gen.html">Graph Engine</a> for how the node sits in the graph and <a href="tracker.gen.html">Tracker</a> for the MIDI source that typically drives it.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

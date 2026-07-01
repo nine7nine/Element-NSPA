@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Graph Engine</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--graph-engine">Lulada &ndash; Graph Engine</h1>
+
+<p>The modular audio graph is Lulada&rsquo;s core: a directed graph of nodes processed in dependency order every block. This page documents how nodes and connections are modelled, how internal nodes and hosted Win32 plugins become the same kind of citizen, how <code>GraphBuilder</code> turns a topology into a buffer-reusing (and parallelisable) op list, and how the render pass runs &ndash; including the worker pool that fans out independent plugin work.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-the-graph-model">The graph model</a></li>
+<li><a href="#2-processors-and-ports">Processors and ports</a></li>
+<li><a href="#3-the-node-factory">The node factory</a></li>
+<li><a href="#4-hosted-plugins-as-nodes">Hosted plugins as nodes</a></li>
+<li><a href="#5-building-the-render-order">Building the render order</a></li>
+<li><a href="#6-parallel-layers">Parallel layers</a></li>
+<li><a href="#7-the-render-pass">The render pass</a></li>
+<li><a href="#8-sub-graphs">Sub-graphs</a></li>
+<li><a href="#9-threading-model">Threading model</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-the-graph-model">1. The graph model</h2>
+
+<p>A Lulada session is, at bottom, a <code>GraphNode</code> &ndash; a directed graph of processing nodes wired by connections. <code>RootGraph</code> is the top-level graph the audio device drives; nested <code>GraphNode</code>s appear as sub-graph nodes inside it. Editing (add/remove node, connect/disconnect) is mediated by <code>GraphManager</code> on the message thread; the audio thread only ever executes a pre-computed render plan.</p>
+
+<table>
+<thead>
+<tr>
+<th> Concept </th>
+<th> Type </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Graph </td>
+<td> <code>GraphNode</code> (<code>src/engine/graphnode.hpp</code>) </td>
+<td> Owns nodes + connections; is itself a <code>Processor</code> so graphs nest </td>
+</tr>
+<tr>
+<td> Node </td>
+<td> <code>Processor</code> (<code>include/element/processor.hpp</code>) </td>
+<td> A ref-counted processing unit with typed ports </td>
+</tr>
+<tr>
+<td> Connection </td>
+<td> <code>GraphNode::Connection : Arc</code> </td>
+<td> <code>(sourceNode, sourcePort) -&gt; (destNode, destPort)</code> </td>
+</tr>
+<tr>
+<td> Manager </td>
+<td> <code>GraphManager</code> (<code>src/engine/graphmanager.hpp</code>) </td>
+<td> Message-thread topology edits, plugin instantiation, persistence </td>
+</tr>
+<tr>
+<td> Top graph </td>
+<td> <code>RootGraph</code> (<code>src/engine/rootgraph.hpp</code>) </td>
+<td> The graph the audio callback renders </td>
+</tr>
+</tbody>
+</table>
+
+
+<h2 id="2-processors-and-ports">2. Processors and ports</h2>
+
+<p>Every node is a <code>Processor</code>. Ports are typed &ndash; audio, CV, and MIDI live in separate namespaces (<code>PortType</code>) &ndash; so a node can carry any mix of audio, control-voltage, and MIDI I/O. The per-block work is handed a <code>RenderContext</code>:</p>
+
+<pre><code class="language-cpp code-block">
+struct RenderContext {
+    juce::AudioSampleBuffer audio;   // audio ports
+    juce::AudioSampleBuffer cv;      // control-voltage ports
+    MidiPipe                midi;    // one or more shared MIDI buffers, by index
+};
+</code></pre>
+
+
+<p>A <code>MidiPipe</code> is a view over shared <code>MidiBuffer</code>s selected by index &ndash; how one buffer pool is shared across the whole render without per-node allocation. Nodes come in two implementation flavours, and the graph treats them identically:</p>
+
+<ul>
+<li><strong>Native <code>Processor</code> subclasses</strong> &ndash; e.g. <code>TrackerNode</code>, <code>MidiPlayerNode</code>, the MIDI tools. They implement <code>render(RenderContext&amp;)</code> directly.</li>
+<li><strong><code>juce::AudioProcessor</code>-backed nodes</strong> &ndash; wrapped by <code>AudioProcessorNode</code> (<code>NodeFactory::wrap</code>). This is how both Element&rsquo;s DSP nodes (EQ, compressor, reverb, &hellip;) and every hosted plugin plug into the same graph.</li>
+</ul>
+
+
+<h2 id="3-the-node-factory">3. The node factory</h2>
+
+<p><code>NodeFactory</code> (<code>src/engine/nodefactory.cpp</code>) registers the <strong>internal</strong> node providers &ndash; always available regardless of installed plugins. Each is a <code>SingleNodeProvider&lt;T&gt;</code> under an <code>EL_NODE_ID_*</code> identifier:</p>
+
+<table>
+<thead>
+<tr>
+<th> Node ID </th>
+<th> Class </th>
+<th> Kind </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>EL_NODE_ID_MIDI_SEQUENCER</code> </td>
+<td> <code>TrackerNode</code> </td>
+<td> Pattern tracker (MIDI out) </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_MIDI_PLAYER</code> </td>
+<td> <code>MidiPlayerNode</code> </td>
+<td> Timeline MIDI clip player </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_SAMPLER</code> </td>
+<td> <code>SamplerNode</code> </td>
+<td> FT2-style sampler instrument </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_AUDIO_CLIP</code> </td>
+<td> <code>AudioClipNode</code> </td>
+<td> Disk-streamed audio region player/recorder </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_AUDIO_ROUTER</code> </td>
+<td> <code>AudioRouterNode</code> </td>
+<td> Matrix audio routing </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_MIDI_CHANNEL_SPLITTER</code> / <code>_ROUTER</code> / <code>_PROGRAM_MAP</code> / <code>_MONITOR</code> </td>
+<td> MIDI tools </td>
+<td> MIDI processing </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_OSC_SENDER</code> / <code>_RECEIVER</code> </td>
+<td> OSC nodes </td>
+<td> OSC I/O </td>
+</tr>
+<tr>
+<td> <code>EL_NODE_ID_SCRIPT</code> </td>
+<td> <code>ScriptNode</code> </td>
+<td> Lua-scripted DSP/MIDI node </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The DAW additions register here alongside Element&rsquo;s originals &ndash; the Tracker, MIDI Player, Sampler, and Audio Clip nodes are ordinary providers, which is exactly what lets the Session View and Arrangement treat them as first-class graph nodes rather than bolted-on subsystems. A separate set of <code>juce::AudioProcessor</code>-backed DSP nodes (EQ, compressor, reverb, volume, &hellip;) is provided through the audio-processor factory and can be hidden from the palette via a deny list.</p>
+
+<h2 id="4-hosted-plugins-as-nodes">4. Hosted plugins as nodes</h2>
+
+<p>A hosted Win32 VST2 / VST3 / CLAP plugin is instantiated (through the plugin manager and the winelib format host in <a href="juce-nspa.gen.html#2-the-winelib-plugin-hosting-module">JUCE-NSPA</a>) as a <code>juce::AudioProcessor</code>, then wrapped by <code>AudioProcessorNode</code> &ndash; <strong>the same wrapper</strong> the internal DSP nodes use. From the graph&rsquo;s point of view there is no difference between an internal node and a plugin: both are <code>Processor</code>s with ports, both are scheduled by <code>GraphBuilder</code>, both render in one pass.</p>
+
+<p>That uniformity is the whole point of the modular core: a Tracker&rsquo;s MIDI output can drive a hosted VST synth, whose stereo output flows into an internal Sampler bus and then a hosted CLAP reverb, all wired in the graph editor and rendered in dependency order in one block. Under the hood, a plugin&rsquo;s <code>processBlock</code> is a marshalled call onto that plugin&rsquo;s dedicated Win32 worker (see <a href="juce-nspa.gen.html#3-the-per-plugin-win32-worker">JUCE-NSPA</a>); the plugin&rsquo;s editor window embeds into the graph&rsquo;s plugin window.</p>
+
+<h2 id="5-building-the-render-order">5. Building the render order</h2>
+
+<p>When the topology changes, <code>GraphBuilder</code> (<code>src/engine/graphbuilder.hpp</code>) turns the graph into a linear list of <strong>render ops</strong> (<code>GraphOp</code>) on the message thread. It does classic shared-buffer allocation: walk the nodes in dependency order, and for each emit copy / clear / process ops that reuse a small pool of shared audio/CV/MIDI buffers instead of a buffer per edge. <code>buffersNeeded(PortType)</code> reports how many the plan needs; node latency is compensated with delay ops so parallel signal paths stay phase-aligned.</p>
+
+<p>The op list is deliberately frugal. Cheap housekeeping (copy/clear/delay) is separated from the expensive <code>ProcessBufferOp</code>s (real plugin/node <code>processBlock</code> calls), and the builder avoids needless work &ndash; for instance it does not insert an audio delay op for a control port on a single connection. The result is an <code>Array&lt;GraphOp&gt;</code> the audio thread executes in order against the shared buffer pool.</p>
+
+<h2 id="6-parallel-layers">6. Parallel layers</h2>
+
+<p>Beyond the linear list, <code>GraphBuilder</code> post-processes the ops into <strong>layers</strong> for parallel dispatch (<code>computeRenderingLayers</code>). Two ops share a layer only if their buffer dependencies do not conflict &ndash; write/read, read/write, and write/write are checked independently on the audio and MIDI buffer namespaces. Layer order is honoured at execution; ops <em>within</em> a layer are independent and may run concurrently. <code>countExpensiveOpsPerLayer</code> then counts the real <code>processBlock</code>s per layer, which gates whether a layer is worth fanning out at all.</p>
+
+<p>At render time, a layer with more than one expensive op is dispatched across the <strong><code>GraphWorker</code> pool</strong> (<code>src/engine/graphnode.cpp</code>): a set of <code>juce::Thread</code>s that each self-promote to <strong>SCHED_FIFO 70</strong> &ndash; one rung below the audio ceiling &ndash; synchronise via <code>WaitableEvent</code>, hold only raw op-index arrays (never a reference to the <code>GraphNode</code>, so lifetime stays trivial), and allocate nothing on the render path. If RT self-promotion fails (no <code>RLIMIT_RTPRIO</code>), a worker runs at SCHED_OTHER and the render still completes &ndash; correctness never depends on the promotion. A single-expensive-op layer runs inline on the audio thread; the fan-out only pays off when several plugin <code>processBlock</code>s can overlap.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.5; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-blu { fill: #7aa2f7; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln-yel  { stroke: #e0af68; stroke-width: 1.4; fill: none; }
+    .ln-blu  { stroke: #7aa2f7; stroke-width: 1.4; fill: none; }
+    .title   { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="900" height="320" class="bg" rx="6"/>
+  <text x="450" y="24" text-anchor="middle" class="title">Independent layers; only multi-plugin layers fan out to workers</text>
+
+  <text x="40" y="66" class="lbl-blu">Layer 0</text>
+  <rect x="120" y="50" width="150" height="34" class="box" rx="6"/><text x="195" y="71" text-anchor="middle" class="lbl-sm">Tracker render</text>
+  <rect x="290" y="50" width="160" height="34" class="box" rx="6"/><text x="370" y="71" text-anchor="middle" class="lbl-sm">MidiPlayer render</text>
+  <text x="470" y="71" class="lbl-mut">no buffer conflict -- run together (cheap, inline)</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="450" y1="90" x2="450" y2="106" class="ln-blu"/>
+
+  <text x="40" y="134" class="lbl-blu">Layer 1</text>
+  <rect x="120" y="118" width="150" height="34" class="hot" rx="6"/><text x="195" y="139" text-anchor="middle" class="lbl-yel">VST synth A</text>
+  <rect x="290" y="118" width="150" height="34" class="hot" rx="6"/><text x="365" y="139" text-anchor="middle" class="lbl-yel">VST synth B</text>
+  <rect x="460" y="118" width="150" height="34" class="hot" rx="6"/><text x="535" y="139" text-anchor="middle" class="lbl-yel">Sampler</text>
+  <text x="640" y="139" class="lbl-mut">3 expensive -> GraphWorkers @70</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="450" y1="158" x2="450" y2="174" class="ln-blu"/>
+
+  <text x="40" y="202" class="lbl-blu">Layer 2</text>
+  <rect x="120" y="186" width="220" height="34" class="hot" rx="6"/><text x="230" y="207" text-anchor="middle" class="lbl-yel">mix bus -> CLAP reverb</text>
+  <text x="360" y="207" class="lbl-mut">depends on layer 1 -- runs after the join barrier</text>
+
+  <rect x="40" y="244" width="820" height="60" class="box" rx="6"/>
+  <text x="60" y="266" class="lbl-yel">Worker discipline</text>
+  <text x="60" y="284" class="lbl-mut">Self-promote SCHED_FIFO 70, WaitableEvent sync, raw index arrays only, zero allocation.</text>
+  <text x="60" y="298" class="lbl-mut">Audio thread joins before the block ends. See Threading &amp; RT Safety for the ladder.</text>
+</svg>
+</div>
+
+
+<h2 id="7-the-render-pass">7. The render pass</h2>
+
+<p>Each audio block, the callback drives <code>RootGraph</code>, which executes the current plan:</p>
+
+<ol>
+<li>Read the transport (playhead beats, tempo, playing state) for this block.</li>
+<li>Execute the ordered/layered <code>GraphOp</code> list against the shared buffer pool &ndash; clears, copies, delays, and <code>processBlock</code>/<code>render</code> calls, fanning out multi-plugin layers.</li>
+<li>Each <code>Processor</code> gets its slice of the shared buffers as a <code>RenderContext</code> and works in place.</li>
+<li>MIDI produced by a node (Tracker, MIDI Player) lands in the shared MIDI buffers, time-sorted, and is visible to downstream nodes in the same pass.</li>
+</ol>
+
+
+<p>Transport-synchronised subsystems hang off this pass: the automation engine&rsquo;s <code>applyForBlock</code> runs from the graph render using the block&rsquo;s beat range, and clip launches queued on the SPSC FIFOs are applied at their target beat within the block. Nothing on this path takes a lock or allocates.</p>
+
+<h2 id="8-sub-graphs">8. Sub-graphs</h2>
+
+<p>Because a <code>GraphNode</code> is itself a <code>Processor</code>, graphs nest: an <code>EL_NODE_ID_GRAPH</code> node is a full graph embedded as a single node in its parent. This is how Element groups routing and how the DAW builds internal plumbing &ndash; e.g. <code>EL_NODE_ID_ARRANGEMENT_TRACKS</code>, the subgraph that holds the arrangement&rsquo;s per-lane audio/MIDI player nodes. A sub-graph renders as one op in its parent&rsquo;s plan, with its own internal render order. Port counts are preserved across session load so nested routing survives a save/reopen.</p>
+
+<h2 id="9-threading-model">9. Threading model</h2>
+
+<p>The graph obeys a strict split (the disciplines are detailed in <a href="threading-rt-safety.gen.html">Threading &amp; RT Safety</a>):</p>
+
+<ul>
+<li><strong>Message thread</strong> owns topology: <code>GraphManager</code> adds/removes nodes and connections, instantiates plugins, and rebuilds the render plan. JUCE <code>Component</code>s are message-thread-only, so editor UI lives here too.</li>
+<li><strong>Audio thread</strong> only executes the pre-built plan &ndash; never edits topology, never allocates, never takes a non-PI lock on the hot path. A new plan built on the message thread is swapped in atomically at a block boundary.</li>
+<li><strong>Graph workers</strong> run fanned-out layers at SCHED_FIFO 70 (§6).</li>
+</ul>
+
+
+<p>Cross-thread data &ndash; clip launch requests, region tables, the automation track snapshot &ndash; moves over lock-free SPSC FIFOs and epoch-gated pointer snapshots, never a shared mutex on the audio path.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

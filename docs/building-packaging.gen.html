@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Building & Packaging</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--building--packaging">Lulada &ndash; Building &amp; Packaging</h1>
+
+<p>This page documents how Lulada is built: the winelib configuration that distinguishes it from upstream Element&rsquo;s stock CMake flow, the two forks it depends on (Wine-NSPA and JUCE-NSPA), the CMake edits that enable in-process plugin hosting and Wayland, and what the launcher must set up at runtime.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-the-winelib-configuration">The winelib configuration</a></li>
+<li><a href="#2-dependencies">Dependencies</a></li>
+<li><a href="#3-what-the-build-enables">What the build enables</a></li>
+<li><a href="#4-building-against-the-juce-nspa-fork">Building against the JUCE-NSPA fork</a></li>
+<li><a href="#5-runtime-launch-requirements">Runtime launch requirements</a></li>
+<li><a href="#6-base-element-build">Base Element build</a></li>
+<li><a href="#7-packaging">Packaging</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-the-winelib-configuration">1. The winelib configuration</h2>
+
+<p>Lulada&rsquo;s canonical build is a <strong>winelib</strong> build &ndash; compiled with <code>wineg++</code> / <code>winegcc</code>, not a native Linux CMake build. This is not an optional variant: it is the whole point. A native-Linux Element cannot load Windows VST/VST3/CLAP plugins, which is the reason the fork exists. The winelib binary is native Linux ELF that can also call the Win32 ABI in-process (see <a href="winelib-runtime.gen.html">Winelib Runtime</a>), so one <code>element_app</code> is both the Linux-native JUCE DAW and the in-process Win32 plugin host.</p>
+
+<p>The source tree here (<code>pkgbuilds/Wine-NSPA/element</code>) is compiled by an out-of-tree winelib build directory; edits to these sources are picked up by an incremental rebuild there. Upstream Element&rsquo;s native/macOS/Windows CMake flows still work for the base app, but they produce a plain Element without Wine plugin hosting.</p>
+
+<h2 id="2-dependencies">2. Dependencies</h2>
+
+<p>The winelib build sits on top of two sibling forks plus Element&rsquo;s own base dependencies:</p>
+
+<table>
+<thead>
+<tr>
+<th> Dependency </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <strong>Wine-NSPA</strong> </td>
+<td> Realtime Wine fork &ndash; the Win32 runtime the plugins load into; NTSync + io_uring fast paths, <code>winewayland.drv</code> host-mode embed, librtpi PI-mutexes </td>
+</tr>
+<tr>
+<td> <strong>JUCE-NSPA</strong> </td>
+<td> Element&rsquo;s JUCE fork &ndash; winelib glue, <code>CriticalSection</code>/waitable PI on <code>__WINE__</code>, <code>WineHWNDEmbedComponent</code>, the Wayland windowing layer </td>
+</tr>
+<tr>
+<td> <strong>Boost</strong> </td>
+<td> <code>&gt;= 1.74</code> (Element requirement) </td>
+</tr>
+<tr>
+<td> <strong>Sol2 / Lua</strong> </td>
+<td> Lua scripting (<code>FindSol2.cmake</code>) </td>
+</tr>
+<tr>
+<td> <strong>CLAP JUCE extensions</strong> </td>
+<td> <code>deps/clap-juce-extensions</code> &ndash; CLAP host + plugin support </td>
+</tr>
+<tr>
+<td> Base libs </td>
+<td> freetype, X11/Xext/Xrandr/Xcomposite/Xinerama/Xrender/Xcursor, ALSA, JACK, curl </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The winelib link also forces <code>-lole32</code> (for the <code>OleInitialize</code> startup call) whenever the compiler is <code>wineg++</code> &ndash; see <code>CMakeLists.txt</code>.</p>
+
+<h2 id="3-what-the-build-enables">3. What the build enables</h2>
+
+<p>The Lulada delta over stock Element is small at the CMake level &ndash; most of the work is in the two forks. <code>CMakeLists.txt</code> adds:</p>
+
+<ul>
+<li><strong><code>JUCE_WAYLAND=1</code></strong> on <code>element_app</code> for <code>UNIX AND NOT APPLE</code> &ndash; enables the JUCE-NSPA Wayland windowing path (main window + dialogs + popups + native node editors on Wayland surfaces, falling back to X11 at runtime when <code>WAYLAND_DISPLAY</code> is absent). See <a href="wayland-embedding.gen.html">Wayland Embedding</a>.</li>
+<li><strong><code>ole32</code> link under Wine</strong> &ndash; so the <code>WinelibPluginHostInit</code> static initializer&rsquo;s <code>OleInitialize</code> resolves.</li>
+<li>Standard hidden-visibility properties, and the usual Element targets (<code>element_app</code>, optional plugins, tests).</li>
+</ul>
+
+
+<p>The plugin-format matrix that results: <strong>VST2 / VST3 / CLAP (Win32)</strong> hosted through Wine-NSPA, plus Element&rsquo;s internal nodes. <strong>LV2 / LADSPA / AU are not built</strong> in the winelib configuration.</p>
+
+<h2 id="4-building-against-the-juce-nspa-fork">4. Building against the JUCE-NSPA fork</h2>
+
+<p>The single most important build fact: <strong>the build compiles the in-tree JUCE it fetches, not a separate JUCE clone.</strong> JUCE-NSPA is a fork of vanilla JUCE 8.0.12 with the NSPA modifications applied (winelib dispatch/path glue, <code>CriticalSection</code> PI, the <code>WineHWNDEmbedComponent</code>, and the Wayland layer). A change to JUCE only affects Lulada once it is present in the JUCE source the build actually consumes &ndash; committing to a history clone alone does nothing to the binary. When reconfiguring from scratch, verify the fork&rsquo;s modifications survived (a <code>FetchContent</code> reset can revert them).</p>
+
+<h2 id="5-runtime-launch-requirements">5. Runtime launch requirements</h2>
+
+<p>Because the process hosts Win32 plugins in-process, the launcher must prepare the Wine environment before the app starts:</p>
+
+<ul>
+<li><strong><code>WINEPREFIX</code></strong> &ndash; point at the prefix that holds the installed Windows plugins.</li>
+<li><strong>A warm <code>wineserver</code></strong> &ndash; the app pre-warms it at startup (<code>ensure_wineserver_warm</code>), but the launcher should keep a persistent, <code>setsid</code>-detached <code>wineserver</code> alive so the daemon does not die when the launching shell exits. A stale socket left by a crashed server must not fool the warm check &ndash; require a live wineserver <em>process</em>, not just the socket file.</li>
+<li><strong><code>WINE_NSPA_WAYLAND_HOST=1</code></strong> &ndash; opt into the host/guest Wayland model (unset = upstream Wine behaviour; standalone plugins still work). See <a href="wayland-embedding.gen.html#3-display-injection">Wayland Embedding</a>.</li>
+<li><strong>Realtime limits</strong> &ndash; the process needs <code>RLIMIT_RTPRIO</code> so <code>SetPriorityClass(REALTIME)</code> and plugin SCHED_FIFO threads can take effect on the PREEMPT_RT kernel.</li>
+</ul>
+
+
+<h2 id="6-base-element-build">6. Base Element build</h2>
+
+<p>For reference, Element&rsquo;s own dependencies (needed by the base app regardless of the winelib layer) are unchanged from upstream. On Arch:</p>
+
+<pre><code class="language-bash code-block">
+sudo pacman -S git base-devel cmake ninja pkgconf boost \
+    freetype2 fontconfig libx11 libxext libxrandr libxcomposite \
+    libxinerama libxrender libxcursor alsa-lib jack2 \
+    ladspa curl ttf-roboto clang
+</code></pre>
+
+
+<p>The stock (non-winelib) configure/build, useful for working on view code that does not need plugin hosting:</p>
+
+<pre><code class="language-bash code-block">
+git submodule update --init --recursive
+cmake -B build -G Ninja
+cmake --build build
+</code></pre>
+
+
+<p>See the base <a href="building.md">building.md</a> for Debian, macOS, Windows, and Docker instructions. The winelib configuration replaces the compiler and adds the flags in <a href="#3-what-the-build-enables">§3</a>; it does not change the source layout.</p>
+
+<h2 id="7-packaging">7. Packaging</h2>
+
+<p>Element&rsquo;s <code>CMakeLists.txt</code> carries CPack configuration (a <code>DEB</code> generator on Linux, <code>ZIP</code> elsewhere) and an <code>installer</code> target. Those target the base app; a winelib distribution additionally has to ship or depend on the Wine-NSPA runtime and set up the launcher environment from <a href="#5-runtime-launch-requirements">§5</a>. Lulada tracks upstream Element (GPL-3.0-or-later) and inherits its license; see the repository root for <code>AUTHORS.md</code>, <code>CHANGELOG.md</code>, and <code>LICENSES/</code>.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

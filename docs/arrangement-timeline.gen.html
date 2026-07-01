@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Arrangement & Timeline</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--arrangement--timeline">Lulada &ndash; Arrangement &amp; Timeline</h1>
+
+<p>This page documents the Arrangement view: the linear, multi-lane timeline that is Lulada&rsquo;s song mode. It covers the lane/region/playlist data model, how audio and MIDI and tracker lanes dispatch through the same sample-accurate scheduler, the disk-streaming engine behind record and playback, and Bezier fades and volume envelopes.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-lanes-regions-playlists">Lanes, regions, playlists</a></li>
+<li><a href="#2-region-placement-and-the-tempo-map">Region placement and the tempo map</a></li>
+<li><a href="#3-sources-and-the-registry">Sources and the registry</a></li>
+<li><a href="#4-dispatch">Dispatch</a></li>
+<li><a href="#5-disk-streaming">Disk streaming</a></li>
+<li><a href="#6-recording">Recording</a></li>
+<li><a href="#7-midi-lanes">MIDI lanes</a></li>
+<li><a href="#8-fades-and-volume-envelopes">Fades and volume envelopes</a></li>
+<li><a href="#9-file-drop-markers-resize">File drop, markers, resize</a></li>
+<li><a href="#10-persistence">Persistence</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-lanes-regions-playlists">1. Lanes, regions, playlists</h2>
+
+<p><code>ArrangementView</code> (<code>src/ui/arrangementview.hpp</code>) is a multi-lane timeline. A <strong>lane</strong> is a row that binds to exactly one target graph node by uuid (<code>Lane.targetNodeUuid</code>); the lane is <strong>not</strong> itself a graph node. Adding or removing lanes does not change graph topology &ndash; you add a node in the graph editor, then point a lane at it. When the target node is missing (deleted from the graph), the lane stays in the arrangement, greyed, with a &ldquo;rebind&rdquo; affordance.</p>
+
+<table>
+<thead>
+<tr>
+<th> Type </th>
+<th> File </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>Lane</code> </td>
+<td> <code>services/timeline/lane.hpp</code> </td>
+<td> One timeline row; binds a <code>Playlist</code> to a target node </td>
+</tr>
+<tr>
+<td> <code>Playlist</code> </td>
+<td> <code>services/timeline/playlist.hpp</code> </td>
+<td> Owns the lane&rsquo;s regions (audio/tracker + MIDI) </td>
+</tr>
+<tr>
+<td> <code>Region</code> </td>
+<td> <code>services/timeline/region.hpp</code> </td>
+<td> Value-typed audio/tracker region (points at a Source by uuid) </td>
+</tr>
+<tr>
+<td> <code>MidiNoteRegion</code> </td>
+<td> <code>services/timeline/midi_note_region.hpp</code> </td>
+<td> MIDI note span (non-copyable; stored separately) </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>A lane&rsquo;s coarse <code>Kind</code> is <code>Audio</code> or <code>Midi</code>. Tracker lanes are <strong>not</strong> a separate kind &ndash; they share <code>Kind::Audio</code> and are runtime-distinguished by the resolved target-node type (the view caches an <code>audioClipCache</code> or <code>trackerCache</code> pointer per lane). Only the genuinely new affordance, the MIDI lane, needs an explicit kind, so older sessions load unchanged.</p>
+
+<h2 id="2-region-placement-and-the-tempo-map">2. Region placement and the tempo map</h2>
+
+<p><code>Region</code> is pure data: a thin wrapper pointing at a <code>Source</code> by uuid, with <strong>beat-domain</strong> placement throughout. <code>positionBeats</code>, <code>startBeats</code>, <code>lengthBeats</code>, <code>fadeInBeats</code>, and <code>fadeOutBeats</code> are all beats relative to the session transport&rsquo;s tempo map; sample-accurate scheduling happens later, on the audio thread.</p>
+
+<ul>
+<li><code>positionBeats</code> &ndash; where the region starts on the timeline.</li>
+<li><code>startBeats</code> &ndash; the offset <em>into</em> the Source where playback begins. Audio regions use this to trim into the file; vht-sequence regions truncate it to 0 (patterns always start at row 0).</li>
+<li><code>lengthBeats</code> &ndash; how long the region plays; <code>looped</code> repeats the source to fill it.</li>
+<li><code>sequenceIdx</code> &ndash; for a tracker region, which vht sequence inside the owning <code>TrackerNode</code> this region plays (so &ldquo;play TrackerX&rsquo;s pattern N&rdquo; needs no Source-per-pattern entry).</li>
+</ul>
+
+
+<p><code>Region</code> is value-typed and owned by the <code>Playlist</code> on the message thread; the audio thread only ever sees <strong>copies</strong> passed through FIFO entries and never reads the source struct directly.</p>
+
+<h2 id="3-sources-and-the-registry">3. Sources and the registry</h2>
+
+<p>Regions reference their audio/MIDI content indirectly, through the <code>SourceRegistry</code> (<code>src/services/sources</code>). Two source kinds back timeline regions:</p>
+
+<table>
+<thead>
+<tr>
+<th> Source </th>
+<th> Backs </th>
+<th> Notes </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>AudioFileSource</code> </td>
+<td> audio regions </td>
+<td> An on-disk audio file, streamed from disk </td>
+</tr>
+<tr>
+<td> <code>VhtSequenceSource</code> </td>
+<td> tracker regions </td>
+<td> A vht sequence inside a <code>TrackerNode</code> </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The indirection means many regions can share one source (e.g. loops), and record commits register the freshly-captured file as a new <code>AudioFileSource</code> before appending a region that points at it.</p>
+
+<h2 id="4-dispatch">4. Dispatch</h2>
+
+<p>Every lane kind launches through the <strong>same</strong> path the Session View uses: a UI-thread detection loop on the 30 Hz timer decides <em>what</em> should fire, and the actual sequence/clip flip is sample-accurate within one render block on the audio thread.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.5; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln  { stroke: #7dcfff; stroke-width: 1.5; fill: none; }
+    .title { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="900" height="250" class="bg" rx="6"/>
+  <text x="450" y="24" text-anchor="middle" class="title">Per-lane dispatch -- one path for audio, tracker, and MIDI</text>
+
+  <rect x="30" y="44" width="230" height="60" class="grn" rx="6"/>
+  <text x="48" y="64" class="lbl-grn">Message thread (30 Hz)</text>
+  <text x="48" y="82" class="lbl-mut">scheduler decides which regions</text>
+  <text x="48" y="96" class="lbl-mut">enter / leave the playhead window</text>
+
+  <rect x="300" y="44" width="260" height="60" class="box" rx="6"/>
+  <text x="430" y="64" text-anchor="middle" class="lbl-sm">TimelineAdapter (per kind)</text>
+  <text x="430" y="82" text-anchor="middle" class="lbl-mut">Audio -> AudioClipNode::schedulePlay</text>
+  <text x="430" y="96" text-anchor="middle" class="lbl-mut">Tracker -> TrackerNode::schedulePlaying</text>
+
+  <rect x="600" y="44" width="270" height="60" class="hot" rx="6"/>
+  <text x="618" y="64" class="lbl-yel">Audio thread (render)</text>
+  <text x="618" y="82" class="lbl-mut">per-node SPSC FIFO -> pending action</text>
+  <text x="618" y="96" class="lbl-mut">fires at target beat, +/- one block</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="260" y1="74" x2="300" y2="74" class="ln"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="560" y1="74" x2="600" y2="74" class="ln"/>
+
+  <rect x="30" y="130" width="840" height="90" class="box" rx="6"/>
+  <text x="50" y="152" class="lbl-sm" style="font-size:8px; letter-spacing:-0.15px">Region copy travels in the FIFO entry -- the audio thread never dereferences the Playlist</text>
+  <text x="50" y="172" class="lbl-mut">Audio region -> Playback_DS streams the AudioFileSource from disk into the block</text>
+  <text x="50" y="188" class="lbl-mut">Tracker region -> TrackerNode advances the referenced vht sequence</text>
+  <text x="50" y="204" class="lbl-mut">MIDI region -> MidiPlayerNode walks the note snapshot, emits NoteOn/Off per block</text>
+</svg>
+</div>
+
+
+<h2 id="5-disk-streaming">5. Disk streaming</h2>
+
+<p>Audio playback and record stream from disk so arbitrarily long files never sit in RAM. The engine (<code>src/services/audiostreaming</code>) is adapted from <strong>NON-DAW</strong>&rsquo;s <code>Disk_Stream</code> (Jonathan Moore Liles, GPLv2-or-later), with the JACK-specific machinery replaced by Lulada&rsquo;s realtime primitives:</p>
+
+<ul>
+<li>Per-channel <code>jack_ringbuffer_t</code> rings become <strong><code>juce::AbstractFifo</code> + <code>std::vector&lt;sample_t&gt;</code></strong> &ndash; the same lock-free SPSC shape the tracker&rsquo;s launch FIFO uses, with no JACK runtime dependency.</li>
+<li>The POSIX <code>sem_t</code> IO-thread wakeup becomes a <strong><code>juce::WaitableEvent</code></strong>, which under the winelib build maps to librtpi <code>PiMutex</code> + <code>PiCond</code> (<code>FUTEX_WAIT_REQUEUE_PI</code>). The audio thread&rsquo;s <code>signal()</code> boosts the IO-thread waiter directly via a kernel futex &ndash; <strong>no wineserver involvement, PI-correct on PREEMPT_RT</strong> (see <a href="winelib-runtime.gen.html#5-priority-inheritance-on-the-hot-paths">Winelib Runtime</a>).</li>
+</ul>
+
+
+<p><code>Disk_Stream</code> is an abstract <code>juce::Thread</code>; <code>Playback_DS</code> and <code>Record_DS</code> are the direction-specific subclasses. The IO thread groups blocks into ~<code>disk_io_kbytes</code> chunks to keep the libsndfile call rate down, and buffers <code>seconds_to_buffer</code> (default 2.0 s) per channel. <code>xruns()</code> counts blocks where <code>process()</code> requested data but the ring was empty (playback) or full (record); <code>Playback_DS</code> throttles seeks against the ring&rsquo;s fill headroom.</p>
+
+<h2 id="6-recording">6. Recording</h2>
+
+<p>Recording is per-lane and armed-driven:</p>
+
+<ol>
+<li>The lane&rsquo;s record-arm toggle (<code>Lane.armed</code>) propagates to the bound <code>AudioClipNode::setArmed</code>.</li>
+<li>Transport-record <strong>and</strong> an armed lane triggers capture inside <code>AudioClipNode</code>, which streams input to disk through a <code>Record_DS</code>.</li>
+<li>On capture finish, <code>AudioClipNode</code> fires <code>onRecordingCommitted</code> with the new file; <code>ArrangementView</code> registers it as an <code>AudioFileSource</code> and appends a <code>Region</code> to the lane&rsquo;s <code>Playlist</code> at the captured position.</li>
+</ol>
+
+
+<p>The working audio-record path is the template the MIDI-record work follows.</p>
+
+<h2 id="7-midi-lanes">7. MIDI lanes</h2>
+
+<p>A MIDI lane spawns a <code>MidiPlayerNode</code> internally (just as an audio lane spawns an <code>AudioClipNode</code>), but the node is a <strong>first-class graph citizen</strong> &ndash; you can wire its MIDI output anywhere, swap the bound synth, or route it through a MIDI tool chain. It publishes one MIDI output port.</p>
+
+<p>The node tracks its bound <code>MidiNoteRegion</code>s through a lock-free pointer table (a <code>RegionEntry</code> array): the message thread publishes a new array on every playlist mutation, and the audio thread loads the current table once per block. Each block, for every region whose <code>[position, position+length)</code> overlaps the block&rsquo;s beat range, the node maps block beats to local region beats (handling loops), walks the region&rsquo;s note snapshot, and emits <code>NoteOn</code> at <code>sampleOffset = (onBeat - blockStart) * samplesPerBeat</code>, with matching <code>NoteOff</code> for notes ending in the block. On stop or teardown it emits all-notes-off; the message thread must publish an empty table <em>before</em> destroying regions so the audio thread observes it first.</p>
+
+<h2 id="8-fades-and-volume-envelopes">8. Fades and volume envelopes</h2>
+
+<p>Each <code>Region</code> carries gain and fade metadata, all evaluated on the audio-thread copy:</p>
+
+<ul>
+<li><strong>Static gain</strong> &ndash; <code>gainDb</code>, a constant.</li>
+<li><strong>Bezier fades</strong> &ndash; <code>fadeInBeats</code> / <code>fadeOutBeats</code> with <code>fadeInCurve</code> / <code>fadeOutCurve</code> in <code>[-1, +1]</code>, mapped to a power-curve exponent <code>p = exp2(curve * 2)</code> (so <code>+1 -&gt; p=4</code> concave-up, <code>-1 -&gt; p=0.25</code> concave-down, <code>0</code> linear). Sparse-written &ndash; only persisted when non-zero.</li>
+<li><strong>Volume envelope</strong> &ndash; an ordered list of <code>EnvelopePoint</code> breakpoints (<code>beatOffset</code>, <code>gainDb</code>, curve). Empty means &ldquo;use static <code>gainDb</code>&rdquo;; two or more points enable per-sample interpolated gain via <code>gainAtBeatOffset(localBeat)</code>. Segments are shaped with the same 2D Bezier handle (<code>curveOffsetT</code> / <code>curveOffsetDb</code>) the automation overlay and piano-roll CC lanes use &ndash; one curve model across the whole DAW (see <a href="automation.gen.html">Automation</a>).</li>
+</ul>
+
+
+<h2 id="9-file-drop-markers-resize">9. File drop, markers, resize</h2>
+
+<ul>
+<li><strong>External file drop</strong> &ndash; <code>ArrangementView</code> is a <code>juce::FileDragAndDropTarget</code>. Dropping an audio file on an existing audio lane appends a region at the drop X; dropping on a tracker lane or empty area creates a new audio lane (in the <code>ArrangementTracks</code> subgraph) and appends the region.</li>
+<li><strong>Markers</strong> &ndash; a <code>MarkerTrack</code> (<code>services/timeline/marker_track.hpp</code>) holds named timeline markers above the lanes.</li>
+<li><strong>Per-lane resize</strong> &ndash; <code>Lane.heightPx</code> gives a lane a custom height (0 = follow the arranger&rsquo;s global vertical zoom), set by dragging the lane&rsquo;s bottom edge; clamped to <code>[kLaneHMin, kLaneHMax]</code> on read and sparse-written so older sessions keep following the global zoom.</li>
+</ul>
+
+
+<h2 id="10-persistence">10. Persistence</h2>
+
+<p>Lanes serialise into the session under <code>tags::arrangement</code> (a <code>&lt;lanes&gt;</code> child), with <strong>automation bindings</strong> stored as a peer list rather than nested inside lanes &ndash; additive, so existing lane serialisation and undo are untouched. Automation <em>curve</em> data itself lives in the song-owned engine, not the view (see <a href="automation.gen.html">Automation</a>). MIDI regions round-trip through the same subtree; audio regions persist their source-file path via the registry so captures and imports survive save/reload.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

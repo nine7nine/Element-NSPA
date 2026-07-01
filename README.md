@@ -48,9 +48,18 @@ both a clip-launcher and a linear timeline.
 * **Modular graph core** (from Element) -- route audio/MIDI anywhere, nest
   sub-graphs, embed plugin UIs, Lua scripting, multi-undo
 
+### Documentation
+Architecture and technical reference for each subsystem lives in [`docs/`](./docs)
+and is published as GitHub Pages at
+[nine7nine.github.io/Lulada](https://nine7nine.github.io/Lulada/) (start at
+`docs/index.html`). It covers the winelib runtime, Wayland embedding, the graph
+engine, and every DAW surface (tracker, piano-roll, session view, arrangement,
+automation, sampler).
+
 ### Building
 Lulada builds against Wine-NSPA (winelib), not upstream Element's standard CMake
-flow. See [building.md](./docs/building.md) for Element's base dependencies.
+flow. See [Building & Packaging](./docs/building-packaging.md) for the winelib
+configuration, or [building.md](./docs/building.md) for Element's base dependencies.
 
 ### Upstream
 Lulada tracks [Element](https://github.com/kushview/element) by Kushview (docs and

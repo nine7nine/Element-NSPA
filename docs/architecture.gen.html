@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Architecture & Design</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--architecture--design">Lulada &ndash; Architecture &amp; Design</h1>
+
+<p>Lulada is a fork of Kushview <a href="https://github.com/kushview/element">Element</a> turned into a full DAW and rebuilt as a single winelib process that hosts Win32 plugins in-process on <a href="https://github.com/nine7nine">Wine-NSPA</a> at realtime priority. This page is the system map: what changes from stock Element, the thread model, and the one idea that ties the DAW surfaces to the audio engine.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-what-lulada-is">What Lulada is</a></li>
+<li><a href="#2-stock-element-vs-lulada">Stock Element vs Lulada</a></li>
+<li><a href="#3-one-process-a-few-threads">One process, a few threads</a></li>
+<li><a href="#4-everything-is-a-graph-node">Everything is a graph node</a></li>
+<li><a href="#5-crossing-the-thread-boundary">Crossing the thread boundary</a></li>
+<li><a href="#6-source-layout">Source layout</a></li>
+<li><a href="#7-design-rules">Design rules</a></li>
+<li><a href="#8-document-index">Document index</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-what-lulada-is">1. What Lulada is</h2>
+
+<p>Element is a modular audio plugin host: a graph of nodes you wire together, with plugin editors embedded in the canvas. Lulada keeps that core intact and adds two things on top.</p>
+
+<ul>
+<li><strong>A realtime winelib runtime.</strong> Compiled with <code>wineg++</code>, the one binary is native Linux ELF that also speaks the Win32 ABI, so it loads <strong>VST2 / VST3 / CLAP plugins directly in-process</strong> through Wine-NSPA &ndash; no bridge process, no IPC audio hop &ndash; and runs its graph at SCHED_FIFO priority under a PREEMPT_RT kernel.</li>
+<li><strong>A DAW layer.</strong> A pattern tracker, a piano-roll, an Ableton/Bitwig Session View, a linear Arrangement timeline, an FT2-style sampler, and a sample-accurate automation engine &ndash; all built as graph nodes and views, not a separate application.</li>
+</ul>
+
+
+<p>The through-line is that the DAW is <em>not</em> bolted onto the side of the host. Each surface drives ordinary graph nodes, so a tracker pattern can play a hosted VST synth whose audio flows into the internal sampler&rsquo;s bus and out through a hosted CLAP reverb, in one render pass.</p>
+
+<h2 id="2-stock-element-vs-lulada">2. Stock Element vs Lulada</h2>
+
+<p>Every Lulada change is additive: stock Element still builds and runs (see <a href="building-packaging.gen.html">Building</a>). The winelib runtime and the DAW surfaces are what the fork adds.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 940 560" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg    { fill: #1a1b26; }
+    .van   { fill: #24283b; stroke: #565f89; stroke-width: 1.2; }
+    .add   { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .keep  { fill: #1a2235; stroke: #7aa2f7; stroke-width: 1.3; }
+    .lbl     { fill: #c0caf5; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px;  font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-blu { fill: #7aa2f7; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mtd { fill: #a9b1d6; font-size: 12px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .col     { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .div     { stroke: #6b7398; stroke-width: 1; stroke-dasharray: 7,4; }
+  </style>
+  <rect x="0" y="0" width="940" height="560" class="bg" rx="6"/>
+  <text x="235" y="28" text-anchor="middle" class="lbl-mtd">Stock Element</text>
+  <text x="700" y="28" text-anchor="middle" class="col">Lulada</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="470" y1="40" x2="470" y2="540" class="div"/>
+
+  <!-- left: stock -->
+  <rect x="40" y="52" width="390" height="52" class="van" rx="6"/>
+  <text x="235" y="74" text-anchor="middle" class="lbl">Native Linux build (cmake/clang)</text>
+  <text x="235" y="90" text-anchor="middle" class="lbl-mut">SCHED_OTHER; no Win32 plugin hosting</text>
+
+  <rect x="40" y="116" width="390" height="52" class="van" rx="6"/>
+  <text x="235" y="138" text-anchor="middle" class="lbl">Modular graph host</text>
+  <text x="235" y="154" text-anchor="middle" class="lbl-mut">nodes, routing, sub-graphs, Lua, undo</text>
+
+  <rect x="40" y="180" width="390" height="52" class="van" rx="6"/>
+  <text x="235" y="202" text-anchor="middle" class="lbl">Plugin formats</text>
+  <text x="235" y="218" text-anchor="middle" class="lbl-mut">native LV2 / VST3 / LADSPA / CLAP</text>
+
+  <rect x="40" y="244" width="390" height="52" class="van" rx="6"/>
+  <text x="235" y="266" text-anchor="middle" class="lbl">Windowing</text>
+  <text x="235" y="282" text-anchor="middle" class="lbl-mut">X11</text>
+
+  <rect x="40" y="308" width="390" height="52" class="van" rx="6"/>
+  <text x="235" y="330" text-anchor="middle" class="lbl">Authoring</text>
+  <text x="235" y="346" text-anchor="middle" class="lbl-mut">graph editor + node editors</text>
+
+  <!-- right: lulada -->
+  <rect x="510" y="52" width="390" height="52" class="add" rx="6"/>
+  <text x="705" y="74" text-anchor="middle" class="lbl-grn">Winelib build (wineg++)</text>
+  <text x="705" y="90" text-anchor="middle" class="lbl-mut">SCHED_FIFO under PREEMPT_RT; in-process Win32 host</text>
+
+  <rect x="510" y="116" width="390" height="52" class="keep" rx="6"/>
+  <text x="705" y="138" text-anchor="middle" class="lbl-blu">Modular graph host  (kept from Element)</text>
+  <text x="705" y="154" text-anchor="middle" class="lbl-mut">same nodes/routing/sub-graphs/Lua/undo, now RT-safe</text>
+
+  <rect x="510" y="180" width="390" height="52" class="add" rx="6"/>
+  <text x="705" y="202" text-anchor="middle" class="lbl-grn">Plugin formats</text>
+  <text x="705" y="218" text-anchor="middle" class="lbl-mut">Win32 VST2 / VST3 / CLAP via Wine-NSPA + internal nodes</text>
+
+  <rect x="510" y="244" width="390" height="52" class="add" rx="6"/>
+  <text x="705" y="266" text-anchor="middle" class="lbl-grn">Windowing</text>
+  <text x="705" y="282" text-anchor="middle" class="lbl-mut">Wayland (subsurface plugin embed) + X11 fallback</text>
+
+  <rect x="510" y="308" width="390" height="52" class="add" rx="6"/>
+  <text x="705" y="330" text-anchor="middle" class="lbl-grn">Authoring  --  the DAW layer</text>
+  <text x="705" y="346" text-anchor="middle" class="lbl-mut">tracker, piano-roll, session, arrangement, sampler, automation</text>
+
+  <!-- legend -->
+  <rect x="40" y="404" width="16" height="16" class="van" rx="6"/>
+  <text x="64" y="417" class="lbl-mut">stock Element</text>
+  <rect x="230" y="404" width="16" height="16" class="keep" rx="6"/>
+  <text x="254" y="417" class="lbl-mut">kept, made RT-safe</text>
+  <rect x="470" y="404" width="16" height="16" class="add" rx="6"/>
+  <text x="494" y="417" class="lbl-mut">added by Lulada</text>
+
+  <rect x="40" y="448" width="860" height="80" class="keep" rx="6"/>
+  <text x="60" y="470" class="lbl-blu">The fork's leverage</text>
+  <text x="60" y="490" class="lbl-mut">Element already models everything as a graph node with typed audio/CV/MIDI ports.</text>
+  <text x="60" y="506" class="lbl-mut">Lulada reuses that: surfaces are node drivers; Win32 plugins are just more nodes.</text>
+  <text x="60" y="522" class="lbl-mut" style="font-size:8px; letter-spacing:-0.15px">One graph -- tracker MIDI, sampler audio, a hosted VST all compose without special cases.</text>
+</svg>
+</div>
+
+
+<h2 id="3-one-process-a-few-threads">3. One process, a few threads</h2>
+
+<p><code>element_app</code> is a single winelib executable. Everything runs in-process on a small set of threads with strict ownership.</p>
+
+<table>
+<thead>
+<tr>
+<th> Thread </th>
+<th> Priority </th>
+<th> Owns </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Message thread </td>
+<td> SCHED_OTHER </td>
+<td> Component tree, all painting/input, session load/save, undo, launch <em>requests</em> </td>
+</tr>
+<tr>
+<td> Audio thread </td>
+<td> SCHED_FIFO (audio ceiling) </td>
+<td> The graph render: <code>RootGraph</code> walks nodes in render order each block </td>
+</tr>
+<tr>
+<td> Graph workers </td>
+<td> SCHED_FIFO 70 (one rung below audio) </td>
+<td> Parallel plugin <code>processBlock</code> for independent render layers </td>
+</tr>
+<tr>
+<td> Disk-IO threads </td>
+<td> SCHED_FIFO </td>
+<td> Fill/drain streaming ringbuffers; woken by a PI-boosted futex </td>
+</tr>
+<tr>
+<td> Background </td>
+<td> low / SCHED_OTHER </td>
+<td> Auth refresh, out-of-process plugin-scanner worker </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The audio thread never blocks on the message thread and never allocates. Where a plugin-heavy graph has independent work, the audio thread fans it out to a small pool of <code>GraphWorker</code> threads (self-promoted to SCHED_FIFO 70, synchronised by <code>WaitableEvent</code>, zero allocations on the render path) and joins before the block ends &ndash; see <a href="graph-engine.gen.html#6-parallel-layers">Graph Engine</a>.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 940 470" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg      { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .blu { fill: #1a2235; stroke: #7aa2f7; stroke-width: 1.5; }
+    .pur { fill: #2a1f35; stroke: #bb9af7; stroke-width: 1.5; }
+    .cy  { fill: #16242b; stroke: #7dcfff; stroke-width: 1.5; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.5; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .lbl     { fill: #c0caf5; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px;  font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-pur { fill: #bb9af7; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-cy  { fill: #7dcfff; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln-grn  { stroke: #9ece6a; stroke-width: 1.4; fill: none; }
+    .ln-cy   { stroke: #7dcfff; stroke-width: 1.4; fill: none; }
+    .ln-yel  { stroke: #e0af68; stroke-width: 1.4; fill: none; }
+    .title   { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="940" height="470" class="bg" rx="6"/>
+  <text x="470" y="26" text-anchor="middle" class="title">Threads and the data that crosses between them</text>
+
+  <!-- message thread -->
+  <rect x="30" y="46" width="300" height="150" class="grn" rx="6"/>
+  <text x="48" y="66" class="lbl-grn">Message thread  (SCHED_OTHER)</text>
+  <text x="48" y="84" class="lbl-mut">Component tree, paint, input</text>
+  <rect x="48" y="94" width="264" height="28" class="box" rx="6"/>
+  <text x="180" y="112" text-anchor="middle" class="lbl-sm">DAW surfaces + node editors</text>
+  <rect x="48" y="128" width="264" height="28" class="box" rx="6"/>
+  <text x="180" y="146" text-anchor="middle" class="lbl-sm">session load / save + undo</text>
+  <rect x="48" y="162" width="264" height="28" class="box" rx="6"/>
+  <text x="180" y="180" text-anchor="middle" class="lbl-mut">edits build new immutable snapshots</text>
+
+  <!-- audio thread -->
+  <rect x="610" y="46" width="300" height="150" class="hot" rx="6"/>
+  <text x="628" y="66" class="lbl-yel">Audio thread  (SCHED_FIFO ceiling)</text>
+  <text x="628" y="84" class="lbl-mut">wait-free, no locks, no alloc</text>
+  <rect x="628" y="94" width="264" height="28" class="box" rx="6"/>
+  <text x="760" y="112" text-anchor="middle" class="lbl-sm">RootGraph render (ordered ops)</text>
+  <rect x="628" y="128" width="264" height="28" class="box" rx="6"/>
+  <text x="760" y="146" text-anchor="middle" class="lbl-mut">loads snapshot ptr once per block</text>
+  <rect x="628" y="162" width="264" height="28" class="box" rx="6"/>
+  <text x="760" y="180" text-anchor="middle" class="lbl-mut">applies launches at target beat</text>
+
+  <!-- SPSC + snapshot channel -->
+  <rect x="360" y="70" width="220" height="46" class="box" rx="6"/>
+  <text x="470" y="89" text-anchor="middle" class="lbl-sm">lock-free SPSC FIFOs</text>
+  <text x="470" y="104" text-anchor="middle" class="lbl-mut">launch requests, region tables</text>
+  <rect x="360" y="126" width="220" height="46" class="box" rx="6"/>
+  <text x="470" y="145" text-anchor="middle" class="lbl-sm">atomic snapshot pointers</text>
+  <text x="470" y="160" text-anchor="middle" class="lbl-mut">COW notes / curves, epoch reclaim</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="330" y1="93" x2="360" y2="93" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="580" y1="93" x2="610" y2="93" class="ln-yel"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="330" y1="149" x2="360" y2="149" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="580" y1="149" x2="610" y2="149" class="ln-yel"/>
+
+  <!-- workers -->
+  <rect x="610" y="214" width="300" height="70" class="hot" rx="6"/>
+  <text x="628" y="234" class="lbl-yel">Graph workers  (SCHED_FIFO 70)</text>
+  <text x="628" y="252" class="lbl-mut">parallel plugin processBlock for</text>
+  <text x="628" y="266" class="lbl-mut">independent render layers, joined per block</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="760" y1="196" x2="760" y2="214" class="ln-yel"/>
+
+  <!-- disk io -->
+  <rect x="360" y="214" width="220" height="70" class="cy" rx="6"/>
+  <text x="378" y="234" class="lbl-cy">Disk-IO threads</text>
+  <text x="378" y="252" class="lbl-mut">Playback_DS / Record_DS rings</text>
+  <text x="378" y="266" class="lbl-mut">woken by a PI-boosted futex</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="610" y1="119" x2="580" y2="119" class="ln-cy"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="470" y1="172" x2="470" y2="214" class="ln-cy"/>
+
+  <!-- runtime -->
+  <rect x="30" y="214" width="300" height="70" class="pur" rx="6"/>
+  <text x="48" y="234" class="lbl-pur">Wine-NSPA runtime</text>
+  <text x="48" y="252" class="lbl-mut">hosted Win32 plugins load here;</text>
+  <text x="48" y="266" class="lbl-mut">RT + OLE set up before main()</text>
+
+  <rect x="30" y="308" width="880" height="140" class="box" rx="6"/>
+  <text x="50" y="330" class="lbl-cy">The rule</text>
+  <text x="50" y="352" class="lbl-mut">A UI edit never mutates engine state in place. It builds a new immutable snapshot</text>
+  <text x="50" y="368" class="lbl-mut">(notes, a curve, a region table) and hands the pointer across atomically, or enqueues</text>
+  <text x="50" y="384" class="lbl-mut">a launch request on an SPSC FIFO. The audio thread loads the snapshot once per block</text>
+  <text x="50" y="400" class="lbl-mut">and reads it all render -- never a half-written edit, never a wait on a UI-held lock.</text>
+  <text x="50" y="424" class="lbl-grn">Green = UI-side data down;  cyan = streamed audio;  amber = the realtime render side.</text>
+</svg>
+</div>
+
+
+<h2 id="4-everything-is-a-graph-node">4. Everything is a graph node</h2>
+
+<p>The single most important architectural fact is that the DAW surfaces are <strong>drivers of internal graph nodes</strong>, registered in <code>src/engine/nodefactory.cpp</code> right alongside Element&rsquo;s originals. There is no parallel &ldquo;song engine&rdquo;; the timeline and the clip launcher schedule the same nodes the graph editor shows.</p>
+
+<table>
+<thead>
+<tr>
+<th> Surface </th>
+<th> Drives </th>
+<th> How </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Tracker </td>
+<td> <code>TrackerNode</code> (vendored vht engine) </td>
+<td> Advances vht sequences; MIDI out </td>
+</tr>
+<tr>
+<td> Piano-roll </td>
+<td> <code>MidiPlayerNode</code> + <code>MidiNoteRegion</code> </td>
+<td> Walks a copy-on-write note snapshot </td>
+</tr>
+<tr>
+<td> Session View </td>
+<td> <code>TrackerNode</code> / <code>MidiPlayerNode</code> columns </td>
+<td> Per-clip launch on a lock-free FIFO </td>
+</tr>
+<tr>
+<td> Arrangement </td>
+<td> <code>AudioClipNode</code> / <code>MidiPlayerNode</code> / <code>TrackerNode</code> lanes </td>
+<td> Beat-scheduled regions, same FIFO </td>
+</tr>
+<tr>
+<td> Sampler </td>
+<td> <code>SamplerNode</code> + <code>SampleBankPool</code> </td>
+<td> MIDI-in, ft2 mixer, audio-out </td>
+</tr>
+<tr>
+<td> Automation </td>
+<td> <code>AutomationEngine</code> (song-owned) </td>
+<td> Wait-free per-block param/CC dispatch </td>
+</tr>
+</tbody>
+</table>
+
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 940 340" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.4; }
+    .pur { fill: #2a1f35; stroke: #bb9af7; stroke-width: 1.4; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.4; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px;  font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-pur { fill: #bb9af7; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln-grn  { stroke: #9ece6a; stroke-width: 1.4; fill: none; }
+    .ln-pur  { stroke: #bb9af7; stroke-width: 1.4; fill: none; }
+    .title   { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="940" height="340" class="bg" rx="6"/>
+  <text x="470" y="24" text-anchor="middle" class="title">Surfaces drive nodes; MIDI and audio flow through one graph</text>
+
+  <!-- surfaces -->
+  <rect x="30" y="44" width="150" height="30" class="grn" rx="6"/><text x="105" y="63" text-anchor="middle" class="lbl-grn">Tracker</text>
+  <rect x="30" y="86" width="150" height="30" class="grn" rx="6"/><text x="105" y="105" text-anchor="middle" class="lbl-grn">Piano-roll</text>
+  <rect x="30" y="128" width="150" height="30" class="grn" rx="6"/><text x="105" y="147" text-anchor="middle" class="lbl-grn">Session View</text>
+  <rect x="30" y="170" width="150" height="30" class="grn" rx="6"/><text x="105" y="189" text-anchor="middle" class="lbl-grn">Arrangement</text>
+  <rect x="30" y="212" width="150" height="30" class="pur" rx="6"/><text x="105" y="231" text-anchor="middle" class="lbl-pur">Automation</text>
+
+  <!-- nodes -->
+  <rect x="300" y="60" width="180" height="34" class="box" rx="6"/><text x="390" y="81" text-anchor="middle" class="lbl-sm">TrackerNode (MIDI out)</text>
+  <rect x="300" y="110" width="180" height="34" class="box" rx="6"/><text x="390" y="131" text-anchor="middle" class="lbl-sm">MidiPlayerNode (MIDI out)</text>
+  <rect x="300" y="160" width="180" height="34" class="box" rx="6"/><text x="390" y="181" text-anchor="middle" class="lbl-sm">AudioClipNode (audio)</text>
+
+  <!-- graph sinks -->
+  <rect x="560" y="70" width="160" height="40" class="box" rx="6"/><text x="640" y="88" text-anchor="middle" class="lbl-sm">SamplerNode</text><text x="640" y="102" text-anchor="middle" class="lbl-mut">or hosted VST/CLAP synth</text>
+  <rect x="560" y="150" width="160" height="40" class="box" rx="6"/><text x="640" y="168" text-anchor="middle" class="lbl-sm">hosted FX (VST3/CLAP)</text><text x="640" y="182" text-anchor="middle" class="lbl-mut">reverb, EQ, ...</text>
+  <rect x="760" y="110" width="150" height="40" class="hot" rx="6"/><text x="835" y="128" text-anchor="middle" class="lbl-yel">RootGraph out</text><text x="835" y="142" text-anchor="middle" class="lbl-mut">audio device</text>
+
+  <!-- surface->node (green = MIDI-authoring surfaces) -->
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="180" y1="59" x2="300" y2="77" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="180" y1="101" x2="300" y2="127" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="180" y1="143" x2="300" y2="127" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="180" y1="185" x2="300" y2="177" class="ln-grn"/>
+  <!-- automation -> nodes (purple) -->
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="180" y1="227" x2="300" y2="177" class="ln-pur"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="180" y1="227" x2="300" y2="127" class="ln-pur"/>
+
+  <!-- node -> sink -->
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="480" y1="77" x2="560" y2="90" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="480" y1="127" x2="560" y2="90" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="480" y1="177" x2="760" y2="130" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="720" y1="90" x2="760" y2="122" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="720" y1="170" x2="760" y2="138" class="ln-grn"/>
+
+  <text x="300" y="270" class="lbl-grn">green = MIDI / audio through the graph</text>
+  <text x="300" y="288" class="lbl-pur">purple = automation dispatch (param / CC writes into the same nodes)</text>
+  <text x="300" y="306" class="lbl-mut">The graph editor shows these very nodes -- nothing the surfaces schedule is hidden.</text>
+</svg>
+</div>
+
+
+<h2 id="5-crossing-the-thread-boundary">5. Crossing the thread boundary</h2>
+
+<p>Because the audio thread must stay wait-free, every piece of data it reads is published, not mutated. Three patterns recur across the codebase (each documented in detail in the relevant subsystem page):</p>
+
+<ul>
+<li><strong>Lock-free SPSC FIFO</strong> &ndash; message thread enqueues a small record (a clip launch, a record request); the audio thread drains it at block start. Latest request per target wins, giving free cancellation. Used by the tracker/session/arrangement launch scheduler and the audio-clip player.</li>
+<li><strong>Copy-on-write snapshot</strong> &ndash; the UI builds a new immutable list (notes, CC points, region tables), <code>atomic_exchange</code>s the live pointer, and defers freeing the old one until the audio thread has advanced past it (epoch-gated trash). Used by <code>MidiNoteRegion</code> and the automation curve model. It deliberately avoids <code>std::atomic&lt;shared_ptr&gt;</code>, whose libstdc++ implementation takes an internal spinlock &ndash; not wait-free, not PI-aware on PREEMPT_RT.</li>
+<li><strong>Priority-inherited signalling</strong> &ndash; the disk streamer&rsquo;s audio-thread <code>signal()</code> boosts the IO-thread waiter through a librtpi PI futex, so a lower-priority IO thread can&rsquo;t invert against the RT audio thread. See <a href="winelib-runtime.gen.html#5-priority-inheritance-on-the-hot-paths">Winelib Runtime</a>.</li>
+</ul>
+
+
+<h2 id="6-source-layout">6. Source layout</h2>
+
+<table>
+<thead>
+<tr>
+<th> Path </th>
+<th> Purpose </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>src/main.cc</code> </td>
+<td> Winelib entry: RT + OLE init, wineserver warm-up, exit diagnostics </td>
+</tr>
+<tr>
+<td> <code>src/application.cpp</code> </td>
+<td> <code>Application</code> / <code>Startup</code>: audio, plugins, MIDI, scripting bring-up </td>
+</tr>
+<tr>
+<td> <code>src/engine</code> </td>
+<td> Modular graph (<code>GraphManager</code>, <code>GraphNode</code>, <code>RootGraph</code>, <code>GraphBuilder</code>), transport; vendored <code>tracker/</code> + <code>sampler/</code> C cores </td>
+</tr>
+<tr>
+<td> <code>src/nodes</code> </td>
+<td> Internal node implementations (Tracker, MidiPlayer, Sampler, AudioClip, MIDI tools, Script, &hellip;) </td>
+</tr>
+<tr>
+<td> <code>src/services</code> </td>
+<td> Service layer + <code>timeline/</code>, <code>automation/</code>, <code>audiostreaming/</code>, <code>sources/</code> </td>
+</tr>
+<tr>
+<td> <code>src/ui</code> </td>
+<td> All views incl. <code>pianoroll/</code>; arrangement, session, graph editor, mixer, Disk Op </td>
+</tr>
+<tr>
+<td> <code>src/dsp</code> </td>
+<td> Shared DSP: quantize ops, <code>automation/</code> curve + track model </td>
+</tr>
+<tr>
+<td> <code>src/el</code>, <code>src/lua</code>, <code>src/scripting</code> </td>
+<td> Element&rsquo;s Lua bindings (sol2), the Lua runtime, the Script node host </td>
+</tr>
+<tr>
+<td> <code>include/element</code> </td>
+<td> Public / internal headers </td>
+</tr>
+</tbody>
+</table>
+
+
+<h2 id="7-design-rules">7. Design rules</h2>
+
+<ul>
+<li>Keep rendering and input on the message thread; keep the graph render wait-free on the audio thread.</li>
+<li>Cross the thread boundary with lock-free FIFOs and epoch-gated snapshots, never a lock on the audio path.</li>
+<li>Host plugins <strong>in-process</strong> via Wine-NSPA; never split the audio path across a bridge process.</li>
+<li>One graph, one kind of node: internal nodes and Win32 plugins are peers you can route freely.</li>
+<li>Tracker and piano-roll are equal first-class surfaces; the same MIDI clip appears in Session <em>and</em> Arrangement.</li>
+<li>Keep song-domain data (automation curves, clip contents) separate from view-domain presentation.</li>
+<li>Wayland vs X11 is an all-or-nothing choice per session &ndash; no mixed-backend plugin embedding.</li>
+</ul>
+
+
+<h2 id="8-document-index">8. Document index</h2>
+
+<table>
+<thead>
+<tr>
+<th> Document </th>
+<th> Covers </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <a href="winelib-runtime.gen.html">Winelib Runtime</a> </td>
+<td> RT + OLE startup, the wineserver warm-up race, PI on the hot paths, plugin formats </td>
+</tr>
+<tr>
+<td> <a href="juce-nspa.gen.html">JUCE-NSPA</a> </td>
+<td> The JUCE fork: winelib plugin hosting, the per-plugin Win32 worker, PI primitives, embedding </td>
+</tr>
+<tr>
+<td> <a href="threading-rt-safety.gen.html">Threading &amp; RT Safety</a> </td>
+<td> The priority ladder, the three wait-free hand-off patterns, PI locking, the worker pool </td>
+</tr>
+<tr>
+<td> <a href="wayland-embedding.gen.html">Wayland Embedding</a> </td>
+<td> The all-wayland stack, shared <code>wl_display</code>, subsurface plugin embed, two-reader loop </td>
+</tr>
+<tr>
+<td> <a href="graph-engine.gen.html">Graph Engine</a> </td>
+<td> Nodes, the node factory, buffer-reuse render ordering, parallel layers, threading </td>
+</tr>
+<tr>
+<td> <a href="tracker.gen.html">Tracker</a> </td>
+<td> The vht engine, two-node design, FX columns, the launch scheduler </td>
+</tr>
+<tr>
+<td> <a href="pianoroll.gen.html">Piano-roll</a> </td>
+<td> The COW note region, diff-command undo, velocity + CC lanes, quantize/humanize </td>
+</tr>
+<tr>
+<td> <a href="session-view.gen.html">Session View</a> </td>
+<td> Clip grid, launch quantisation, the queued-state machine, follow actions </td>
+</tr>
+<tr>
+<td> <a href="arrangement-timeline.gen.html">Arrangement &amp; Timeline</a> </td>
+<td> Lanes, regions, one dispatch path, disk streaming, record, fades </td>
+</tr>
+<tr>
+<td> <a href="automation.gen.html">Automation</a> </td>
+<td> COW curve model, the wait-free engine, targets/resolver, the overlay UI </td>
+</tr>
+<tr>
+<td> <a href="sampler.gen.html">Sampler</a> </td>
+<td> ft2 mixer DSP, the instrument model, four buses, the session-global bank pool </td>
+</tr>
+<tr>
+<td> <a href="building-packaging.gen.html">Building</a> </td>
+<td> The winelib configuration, the two forks, launch requirements </td>
+</tr>
+</tbody>
+</table>
+
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- JUCE-NSPA</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--juce-nspa">Lulada &ndash; JUCE-NSPA</h1>
+
+<p>Lulada runs on a fork of JUCE (JUCE-NSPA) that turns the framework into a realtime, winelib-native plugin host. This page documents what the fork changes: the in-process Win32 plugin-hosting module, the per-plugin Win32 worker that keeps plugin code on a thread it recognises, the priority-inheriting synchronization primitives, and the plugin-editor embedding.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-why-a-juce-fork">Why a JUCE fork</a></li>
+<li><a href="#2-the-winelib-plugin-hosting-module">The winelib plugin-hosting module</a></li>
+<li><a href="#3-the-per-plugin-win32-worker">The per-plugin Win32 worker</a></li>
+<li><a href="#4-rt-safe-synchronization">RT-safe synchronization</a></li>
+<li><a href="#5-priority-inheritance-in-practice">Priority inheritance in practice</a></li>
+<li><a href="#6-plugin-editor-embedding">Plugin-editor embedding</a></li>
+<li><a href="#7-the-wayland-windowing-layer">The Wayland windowing layer</a></li>
+<li><a href="#8-how-it-is-built">How it is built</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-why-a-juce-fork">1. Why a JUCE fork</h2>
+
+<p>Stock JUCE targets native platforms: on Linux it opens X11 windows, its <code>CriticalSection</code> is a plain <code>pthread_mutex</code>, and its plugin formats <code>dlopen</code> native <code>.so</code>/<code>.vst3</code> bundles. None of that fits a realtime winelib DAW that has to load <strong>Windows</strong> plugins in-process under a PREEMPT_RT scheduler. JUCE-NSPA (a fork of JUCE 8.0.12) adds four capabilities, all gated on the winelib build (<code>__WINE__</code> / <code>JUCE_LINUX</code>) so the vanilla behaviour is untouched off that path:</p>
+
+<table>
+<thead>
+<tr>
+<th> Area </th>
+<th> Stock JUCE </th>
+<th> JUCE-NSPA </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Plugin hosting </td>
+<td> native <code>.so</code>/VST3 bundles </td>
+<td> Win32 VST2 / VST3 / CLAP as PE modules, in-process </td>
+</tr>
+<tr>
+<td> Plugin thread identity </td>
+<td> any pthread </td>
+<td> one dedicated <strong>Win32</strong> worker per plugin instance </td>
+</tr>
+<tr>
+<td> <code>CriticalSection</code> </td>
+<td> <code>pthread_mutex</code> (no PI) </td>
+<td> librtpi <code>pi_mutex_t</code> (FUTEX_LOCK_PI) </td>
+</tr>
+<tr>
+<td> <code>WaitableEvent</code> </td>
+<td> pthread cond/futex </td>
+<td> librtpi <code>PiMutex</code> + <code>PiCond</code> (requeue-PI) </td>
+</tr>
+<tr>
+<td> Plugin editor window </td>
+<td> X11 top-level </td>
+<td> embedded <code>HWND</code> via X11 reparent <strong>or</strong> <code>wl_subsurface</code> </td>
+</tr>
+</tbody>
+</table>
+
+
+<h2 id="2-the-winelib-plugin-hosting-module">2. The winelib plugin-hosting module</h2>
+
+<p>Plugin hosting lives in a dedicated module, <code>juce_audio_processors_headless</code>, which carries winelib variants of the VST2, VST3, and CLAP format hosts (<code>juce_VST3PluginFormatImpl.h</code>, <code>juce_VSTPluginFormatImpl.h</code>, <code>juce_CLAPPluginFormatImpl.h</code>) plus the winelib ABI shims (<code>juce_winelib_dispatch.h</code>, <code>juce_winelib_path.h</code>, <code>juce_clap_winelib_abi.h</code>). Because the host binary is itself a PE-aware winelib ELF, it loads a Windows plugin through Wine&rsquo;s own PE loader rather than <code>dlopen</code> &ndash; the plugin sees a normal Win32 process. The resulting <code>AudioPluginInstance</code> is an ordinary <code>juce::AudioProcessor</code>, which Element wraps as a graph node exactly like an internal DSP node (see <a href="graph-engine.gen.html#4-hosted-plugins-as-nodes">Graph Engine</a>).</p>
+
+<h2 id="3-the-per-plugin-win32-worker">3. The per-plugin Win32 worker</h2>
+
+<p>This is the subtlest and most important part of the fork. When a winelib ELF (compiled in <code>JUCE_LINUX</code> mode) calls into Win32 PE plugin code, <strong>every call must originate from a thread created by Win32 <code>CreateThread</code>, not a JUCE-promoted pthread.</strong> PE libraries assume a per-thread Win32 identity &ndash; a TEB, Win32 TLS slots, a COM apartment. A JUCE pthread has none of that, so when plugin code does a TLS lookup, a COM apartment check, or a thread-local allocation against missing state, it eventually hits an unrecoverable condition and calls <code>ExitProcess()</code>. During bring-up this showed up as the process dying via <code>LdrShutdownProcess</code> <em>from inside the plugin</em>, with no prior signal, abort, or C++ exception &ndash; a silent, baffling exit.</p>
+
+<p>The fix (<code>juce_winelib_dispatch.h</code>) is a <strong>dedicated Win32 worker thread per plugin instance</strong>, owned by the format&rsquo;s per-instance holder. Every plugin-touching call for that instance marshals onto its worker, so the plugin sees one stable Win32 thread identity for its whole lifetime.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .pur { fill: #2a1f35; stroke: #bb9af7; stroke-width: 1.5; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.5; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .bad { fill: #2a1a1a; stroke: #f7768e; stroke-width: 1.4; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px;  font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-pur { fill: #bb9af7; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-red { fill: #f7768e; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln-grn  { stroke: #9ece6a; stroke-width: 1.4; fill: none; }
+    .ln-pur  { stroke: #bb9af7; stroke-width: 1.4; fill: none; }
+    .ln-red  { stroke: #f7768e; stroke-width: 1.4; fill: none; stroke-dasharray: 5,3; }
+    .title   { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="920" height="380" class="bg" rx="6"/>
+  <text x="460" y="24" text-anchor="middle" class="title">Plugin calls marshal onto a Win32 worker with a real TEB / COM apartment</text>
+
+  <!-- callers -->
+  <rect x="30" y="52" width="200" height="40" class="grn" rx="6"/>
+  <text x="130" y="70" text-anchor="middle" class="lbl-grn">Message thread</text>
+  <text x="130" y="84" text-anchor="middle" class="lbl-mut">load / setActive / editor</text>
+  <rect x="30" y="110" width="200" height="40" class="hot" rx="6"/>
+  <text x="130" y="128" text-anchor="middle" class="lbl-yel" fill="#e0af68" font-weight="bold">Audio thread</text>
+  <text x="130" y="142" text-anchor="middle" class="lbl-mut">process (per block)</text>
+
+  <!-- marshal -->
+  <rect x="300" y="70" width="180" height="60" class="box" rx="6"/>
+  <text x="390" y="92" text-anchor="middle" class="lbl-sm">per-instance dispatch</text>
+  <text x="390" y="108" text-anchor="middle" class="lbl-mut">marshal call onto the</text>
+  <text x="390" y="121" text-anchor="middle" class="lbl-mut">instance's Win32 worker</text>
+
+  <!-- worker -->
+  <rect x="560" y="52" width="330" height="98" class="pur" rx="6"/>
+  <text x="580" y="72" class="lbl-pur">Win32 worker (CreateThread)  --  one per instance</text>
+  <text x="580" y="90" class="lbl-mut">stable TEB + Win32 TLS + COM apartment</text>
+  <rect x="580" y="100" width="290" height="40" class="box" rx="6"/>
+  <text x="725" y="118" text-anchor="middle" class="lbl-sm">createInstance / initialize / setActive</text>
+  <text x="725" y="132" text-anchor="middle" class="lbl-mut">process / terminate  --  all on this thread</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="230" y1="80" x2="300" y2="90" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="230" y1="120" x2="300" y2="110" class="ln-red"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="480" y1="100" x2="560" y2="100" class="ln-pur"/>
+
+  <!-- the alternative -->
+  <rect x="30" y="200" width="860" height="70" class="bad" rx="6"/>
+  <text x="50" y="222" class="lbl-red">Without the worker: plugin runs on a JUCE pthread with no Win32 identity</text>
+  <text x="50" y="242" class="lbl-mut">First TLS / COM / thread-local access on missing state -> plugin calls ExitProcess()</text>
+  <text x="50" y="258" class="lbl-mut">Symptom: LdrShutdownProcess from inside the plugin -- no signal / abort / exception</text>
+
+  <rect x="30" y="290" width="860" height="70" class="box" rx="6"/>
+  <text x="50" y="312" class="lbl-pur">Consequence for the graph</text>
+  <text x="50" y="332" class="lbl-mut">N instances run on N parallel Win32 workers. A plugin's processBlock is a marshalled</text>
+  <text x="50" y="348" class="lbl-mut">call onto that worker -- so parallel layers overlap plugins across worker threads.</text>
+</svg>
+</div>
+
+
+<h2 id="4-rt-safe-synchronization">4. RT-safe synchronization</h2>
+
+<p>Under a PREEMPT_RT kernel with the audio thread at SCHED_FIFO, a plain <code>pthread_mutex</code> (priority <code>PRIO_NONE</code>) is a latency hazard: if a low-priority thread holds it and gets preempted, the RT thread blocks unboundedly &ndash; classic priority inversion. JUCE-NSPA replaces the two primitives that matter with <strong>priority-inheriting</strong> ones, vendored from librtpi (<code>native/juce_winelib_rtpi.h</code>, wrapped by <code>native/juce_winelib_pi_sync.h</code>):</p>
+
+<ul>
+<li><strong><code>CriticalSection</code> becomes a librtpi recursive PI mutex</strong> (<code>pi_mutex_t</code>, <code>NSPA_RTPI_MUTEX_RECURSIVE</code>). It locks with a <strong>direct <code>FUTEX_LOCK_PI</code></strong> syscall &ndash; no Wine ntdll surface, no wineserver round-trip. It is the same kernel mechanism as glibc&rsquo;s <code>PTHREAD_PRIO_INHERIT</code>, minus the per-op user-space tax (TEB lookup, CS struct bookkeeping, spin-count loop). This one change makes <strong>every <code>juce::CriticalSection</code> in the codebase PI-correct</strong>, which is why the tracker&rsquo;s <code>engineLock_</code>, the sampler&rsquo;s <code>sampleLock</code>, and the automation engine&rsquo;s lookup lock are all safe to touch from a non-RT thread while the audio thread runs.</li>
+<li><strong><code>WaitableEvent</code> becomes a <code>PiMutex</code> + <code>PiCond</code> pair.</strong> <code>PiCond</code> uses <code>FUTEX_WAIT_REQUEUE_PI</code> / <code>FUTEX_CMP_REQUEUE_PI</code>, so the wake-and-reacquire is atomic with respect to PI ordering. This is what the disk streamer&rsquo;s IO-thread wakeup rides: the audio thread&rsquo;s <code>signal()</code> boosts the waiting IO thread through the kernel futex, no wineserver involved.</li>
+</ul>
+
+
+<blockquote><p><strong>Why not <code>std::mutex</code> / <code>std::condition_variable</code>:</strong> <code>std::mutex</code> is <code>PRIO_NONE</code> &ndash; no inheritance, so it inverts under SCHED_FIFO. And a plain condition variable leaves a window between wake and reacquire where the woken thread can be preempted, breaking the PI chain until it manages to relock. <code>PiCond</code>&rsquo;s requeue-PI closes that window. The wrappers present the exact <code>std::mutex</code> + <code>std::condition_variable_any</code> surface, so calling code reads normally.</p></blockquote>
+
+<p>The wrappers also support a process-shared mode (<code>FUTEX_LOCK_PI</code>, placement-new into shmem) &ndash; unused by the in-process host today, but it leaves the door open for a PI shmem rendezvous across the Element/winelib boundary at zero runtime cost (a flag bit).</p>
+
+<h2 id="5-priority-inheritance-in-practice">5. Priority inheritance in practice</h2>
+
+<p>The payoff is a chain that never inverts: a low-priority thread holding a lock the RT audio thread needs is <em>temporarily boosted</em> to the audio thread&rsquo;s priority until it releases.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .bad { fill: #2a1a1a; stroke: #f7768e; stroke-width: 1.4; }
+    .good{ fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.4; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px;  font-family: 'JetBrains Mono', monospace; }
+    .lbl-red { fill: #f7768e; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln-red  { stroke: #f7768e; stroke-width: 1.4; fill: none; }
+    .ln-grn  { stroke: #9ece6a; stroke-width: 1.4; fill: none; }
+    .title   { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="920" height="300" class="bg" rx="6"/>
+  <text x="230" y="24" text-anchor="middle" class="lbl-red">pthread_mutex (PRIO_NONE)</text>
+  <text x="690" y="24" text-anchor="middle" class="lbl-grn">librtpi PI mutex (FUTEX_LOCK_PI)</text>
+
+  <!-- inversion -->
+  <rect x="30" y="44" width="400" height="34" class="bad" rx="6"/><text x="230" y="65" text-anchor="middle" class="lbl-sm">RT audio @80 wants the lock</text>
+  <rect x="30" y="92" width="400" height="34" class="box" rx="6"/><text x="230" y="113" text-anchor="middle" class="lbl-sm">low-prio UI thread holds it</text>
+  <rect x="30" y="140" width="400" height="34" class="bad" rx="6"/><text x="230" y="161" text-anchor="middle" class="lbl-mut">a mid-prio thread preempts the UI holder</text>
+  <rect x="30" y="188" width="400" height="52" class="bad" rx="6"/><text x="230" y="208" text-anchor="middle" class="lbl-red">audio @80 blocked unboundedly</text><text x="230" y="224" text-anchor="middle" class="lbl-mut">xrun / dropout -- classic inversion</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="230" y1="78" x2="230" y2="92" class="ln-red"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="230" y1="126" x2="230" y2="140" class="ln-red"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="230" y1="174" x2="230" y2="188" class="ln-red"/>
+
+  <!-- PI -->
+  <rect x="490" y="44" width="400" height="34" class="good" rx="6"/><text x="690" y="65" text-anchor="middle" class="lbl-sm">RT audio @80 wants the lock</text>
+  <rect x="490" y="92" width="400" height="34" class="box" rx="6"/><text x="690" y="113" text-anchor="middle" class="lbl-sm">low-prio UI holder is boosted to @80</text>
+  <rect x="490" y="140" width="400" height="34" class="good" rx="6"/><text x="690" y="161" text-anchor="middle" class="lbl-mut">mid-prio thread cannot preempt the boosted holder</text>
+  <rect x="490" y="188" width="400" height="52" class="good" rx="6"/><text x="690" y="208" text-anchor="middle" class="lbl-grn">holder releases fast; audio proceeds</text><text x="690" y="224" text-anchor="middle" class="lbl-mut">bounded blocking = no dropout</text>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="690" y1="78" x2="690" y2="92" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="690" y1="126" x2="690" y2="140" class="ln-grn"/>
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="690" y1="174" x2="690" y2="188" class="ln-grn"/>
+
+  <text x="460" y="270" text-anchor="middle" class="lbl-mut">Wait-free snapshots are preferred; PI is the safety net for the few locks that remain.</text>
+</svg>
+</div>
+
+
+<h2 id="6-plugin-editor-embedding">6. Plugin-editor embedding</h2>
+
+<p>A hosted plugin&rsquo;s editor is a Win32 <code>HWND</code>. <code>WineHWNDEmbedComponent</code> (<code>juce_gui_extra/embedding/</code>) makes that window a child of Lulada&rsquo;s own window so the editor renders inside the graph&rsquo;s plugin window instead of as a detached top-level. It has two backends selected by the session&rsquo;s windowing stack:</p>
+
+<ul>
+<li><strong>X11</strong> &ndash; reparent the plugin <code>HWND</code>&rsquo;s X window under the host window (<code>XReparentWindow</code>), the long-standing path.</li>
+<li><strong>Wayland</strong> &ndash; turn the plugin surface into a <code>wl_subsurface</code> of the host surface (the branch in <code>juce_WineHWNDEmbedComponent_linux.cpp</code>), because Wayland has no cross-window reparent. See <a href="wayland-embedding.gen.html#4-subsurface-plugin-embed">Wayland Embedding</a>.</li>
+</ul>
+
+
+<h2 id="7-the-wayland-windowing-layer">7. The Wayland windowing layer</h2>
+
+<p>JUCE-NSPA carries a Wayland windowing backend (adapted from the plugdata-team JUCE port and NSPA-tuned): a <code>WaylandComponentPeer</code> for host surfaces and a <code>WaylandMessageLoop</code> that reads the default event queue around the message thread&rsquo;s <code>poll()</code>. When the app runs all-Wayland, this backend owns the <code>wl_display</code> that the Wine graphics driver adopts as a guest &ndash; the full host/guest model, the two-reader discipline, and its bring-up lessons are documented in <a href="wayland-embedding.gen.html">Wayland Embedding</a>.</p>
+
+<h2 id="8-how-it-is-built">8. How it is built</h2>
+
+<p>JUCE-NSPA is compiled <strong>in-tree with Lulada</strong>, not linked as an external prebuilt library &ndash; the winelib build fetches the JUCE source and compiles it with the NSPA modifications applied. A JUCE change only affects Lulada once it is in the JUCE source the build actually consumes. See <a href="building-packaging.gen.html#4-building-against-the-juce-nspa-fork">Building</a> for the two-tree layout and the reconfigure caveat.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

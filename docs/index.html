@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada Documentation</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  h1 { color: var(--accent); font-size: 1.6rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul { padding-left: 1.5rem; margin-bottom: 0.75rem; list-style: none; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; color: var(--cyan); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  code {
+    background: var(--surface); padding: 0.1rem 0.35rem;
+    border-radius: 3px; font-size: 0.8rem; color: var(--cyan);
+  }
+  .subtitle { color: var(--yellow); font-size: 0.95rem; margin-bottom: 1.5rem; }
+  .lead { color: var(--fg); font-size: 0.86rem; margin: 0.75rem 0 1rem; }
+  .doc-list { margin: 1rem 0; }
+  .doc-list li {
+    padding: 0.6rem 0.8rem; margin-bottom: 0.4rem;
+    background: var(--surface); border-radius: 5px;
+    border-left: 3px solid var(--accent);
+  }
+  .doc-list li:hover { border-left-color: var(--cyan); }
+  .doc-list .desc { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
+  .badge {
+    display: inline-block; padding: 0.1rem 0.5rem; border-radius: 3px;
+    font-size: 0.7rem; font-weight: 600; margin-left: 0.5rem;
+  }
+  .badge-core { background: var(--purple); color: var(--bg); }
+  .badge-page { background: var(--cyan); color: var(--bg); }
+  .badge-ops { background: var(--green); color: var(--bg); }
+  .stats { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0 2rem; }
+  .stat-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.7rem 1.1rem; min-width: 120px;
+  }
+  .stat-val { color: var(--green); font-size: 1.3rem; font-weight: 700; }
+  .stat-label { color: var(--muted); font-size: 0.72rem; }
+</style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+
+<h1>Lulada Documentation</h1>
+<p class="subtitle">Design and technical reference for Lulada &mdash; a Winelib / Wayland DAW built on Element and Wine-NSPA.</p>
+
+<p class="lead">
+  Lulada is a fork of <a href="https://github.com/kushview/element">Element</a> extended into a
+  full DAW and built as a <strong>winelib</strong> application: native Linux code that hosts
+  <strong>Win32 VST2 / VST3 / CLAP plugins in-process</strong> through
+  <a href="https://github.com/nine7nine">Wine-NSPA</a> at realtime priority, with an experimental
+  Wayland windowing path. On top of Element's modular graph core it adds a tracker, a piano-roll, an
+  Ableton/Bitwig-style Session View, a linear Arrangement timeline, an FT2-style sampler, and a
+  sample-accurate automation engine. These pages document each subsystem from its real implementation.
+</p>
+
+<div class="stats">
+  <div class="stat-box"><div class="stat-val">1</div><div class="stat-label">winelib process</div></div>
+  <div class="stat-box"><div class="stat-val">4</div><div class="stat-label">DAW surfaces</div></div>
+  <div class="stat-box"><div class="stat-val">3</div><div class="stat-label">plugin formats</div></div>
+  <div class="stat-box"><div class="stat-val">RT</div><div class="stat-label">realtime priority</div></div>
+  <div class="stat-box"><div class="stat-val">~130k</div><div class="stat-label">lines of C/C++</div></div>
+</div>
+
+<hr>
+
+<h2>Architecture &amp; Design</h2>
+<ul class="doc-list">
+  <li>
+    <a href="architecture.gen.html">Architecture Overview</a>
+    <span class="badge badge-core">CORE</span>
+    <div class="desc">The single winelib process, its layers, the modular graph under the DAW surfaces, source layout, and design rules.</div>
+  </li>
+  <li>
+    <a href="winelib-runtime.gen.html">Winelib Runtime</a>
+    <span class="badge badge-core">CORE</span>
+    <div class="desc">The startup that promotes the process to realtime and initialises OLE before any plugin loads, the wineserver warm-up race, PI on the hot paths, and the plugin-format matrix.</div>
+  </li>
+  <li>
+    <a href="juce-nspa.gen.html">JUCE-NSPA</a>
+    <span class="badge badge-core">CORE</span>
+    <div class="desc">The JUCE fork: the winelib plugin-hosting module, the per-plugin Win32 worker that keeps plugin code on a thread it recognises, librtpi priority-inheriting sync, and plugin-editor embedding.</div>
+  </li>
+  <li>
+    <a href="threading-rt-safety.gen.html">Threading &amp; RT Safety</a>
+    <span class="badge badge-core">CORE</span>
+    <div class="desc">The SCHED_FIFO priority ladder, the three wait-free hand-off patterns (SPSC FIFO, COW snapshot, PI signalling), the parallel render pool, and the hazards the discipline defends against.</div>
+  </li>
+  <li>
+    <a href="wayland-embedding.gen.html">Wayland Embedding</a>
+    <span class="badge badge-core">CORE</span>
+    <div class="desc">The all-or-nothing stack, the host/guest shared <code>wl_display</code>, subsurface plugin embedding, the two-reader event loop, and X11 fallback.</div>
+  </li>
+  <li>
+    <a href="graph-engine.gen.html">Graph Engine</a>
+    <span class="badge badge-core">CORE</span>
+    <div class="desc">Nodes and the node factory, hosted plugins as first-class graph citizens, buffer-reuse render ordering, layered parallel scheduling, and the threading model.</div>
+  </li>
+</ul>
+
+<h2>DAW Surfaces</h2>
+<ul class="doc-list">
+  <li>
+    <a href="tracker.gen.html">Tracker</a>
+    <span class="badge badge-page">PAGE</span>
+    <div class="desc">The vendored vht engine, the two-node design, two playback models, and the lock-free sample-accurate launch scheduler.</div>
+  </li>
+  <li>
+    <a href="pianoroll.gen.html">Piano-roll</a>
+    <span class="badge badge-page">PAGE</span>
+    <div class="desc">The copy-on-write MIDI note region, Ardour-style diff commands, velocity + CC lanes, and quantize/humanize with live-preview parity.</div>
+  </li>
+  <li>
+    <a href="session-view.gen.html">Session View</a>
+    <span class="badge badge-page">PAGE</span>
+    <div class="desc">The clip-launch grid, launch quantisation, the queued-state machine, follow actions, and per-scene transport overrides.</div>
+  </li>
+  <li>
+    <a href="arrangement-timeline.gen.html">Arrangement &amp; Timeline</a>
+    <span class="badge badge-page">PAGE</span>
+    <div class="desc">Lanes, regions, and playlists; one dispatch path for audio/MIDI/tracker; the disk-streaming engine; recording; Bezier fades and volume envelopes.</div>
+  </li>
+  <li>
+    <a href="automation.gen.html">Automation</a>
+    <span class="badge badge-page">PAGE</span>
+    <div class="desc">The wait-free song-owned engine, three target kinds, the unified 2D-Bezier curve model, mapping-engine arbitration, and the overlay UI.</div>
+  </li>
+</ul>
+
+<h2>Engine</h2>
+<ul class="doc-list">
+  <li>
+    <a href="sampler.gen.html">Sampler</a>
+    <span class="badge badge-page">PAGE</span>
+    <div class="desc">The ft2-clone mixer DSP, the FT2/Renoise instrument model, four-bus output, and the session-global bank pool.</div>
+  </li>
+</ul>
+
+<h2>Build &amp; Operations</h2>
+<ul class="doc-list">
+  <li>
+    <a href="building-packaging.gen.html">Building &amp; Packaging</a>
+    <span class="badge badge-ops">OPS</span>
+    <div class="desc">The winelib configuration, the Wine-NSPA and JUCE-NSPA forks, the enabling CMake edits, launch requirements, and packaging.</div>
+  </li>
+</ul>
+
+<hr>
+<p style="color: var(--muted); font-size: 0.75rem; margin-top: 2rem;">
+  Lulada by Jordan Johnston &mdash; a fork of <a href="https://github.com/kushview/element">Element</a> (Kushview, GPL-3.0-or-later)
+  &mdash; <a href="https://github.com/nine7nine/Lulada">github.com/nine7nine/Lulada</a>
+  <br>Winelib / Wayland DAW on Wine-NSPA
+</p>
+
+<script>hljs.highlightAll();</script>
+</body></html>

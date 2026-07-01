@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Piano-roll</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--piano-roll">Lulada &ndash; Piano-roll</h1>
+
+<p>This page documents the piano-roll editor: the copy-on-write MIDI note region it edits, the Ardour-style diff commands that make every gesture a first-class undoable action, the velocity and CC controller lanes, and the quantize / humanize / scale tools with live preview.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-where-the-piano-roll-fits">Where the piano-roll fits</a></li>
+<li><a href="#2-the-midinoteregion">The MidiNoteRegion</a></li>
+<li><a href="#3-the-editor-dock">The editor dock</a></li>
+<li><a href="#4-tools-and-gestures">Tools and gestures</a></li>
+<li><a href="#5-diff-commands-and-undo">Diff commands and undo</a></li>
+<li><a href="#6-velocity-and-cc-lanes">Velocity and CC lanes</a></li>
+<li><a href="#7-quantize-humanize-scale">Quantize, humanize, scale</a></li>
+<li><a href="#8-rendering">Rendering</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-where-the-piano-roll-fits">1. Where the piano-roll fits</h2>
+
+<p>The piano-roll is a <strong>peer</strong> to the tracker &ndash; both are first-class MIDI authoring surfaces. Where the tracker edits vht patterns, the piano-roll edits a <code>MidiNoteRegion</code>: a contiguous span of notes that lives on a timeline lane and is played back by a <code>MidiPlayerNode</code> (see <a href="arrangement-timeline.gen.html">Arrangement &amp; Timeline</a>). The same region shows up in both the Session View and the Arrangement, so one MIDI clip is authored once and used everywhere.</p>
+
+<p>The editor itself (<code>PianoRollView</code>, <code>src/ui/pianoroll/</code>) is a bottom-attached dock: a header with the region label and tool palette, a fixed-width <code>PianoRollKeyboard</code> column on the left, and a horizontally-scrolling <code>PianoRollGrid</code> in a <code>Viewport</code> on the right. It binds to a region by uuid and resolves the live pointer through a <code>RegionResolver</code> on each paint &ndash; so a region removed and re-added across an undo boundary re-resolves correctly.</p>
+
+<h2 id="2-the-midinoteregion">2. The MidiNoteRegion</h2>
+
+<p><code>MidiNoteRegion</code> (<code>src/services/timeline/midi_note_region.hpp</code>) is the shared data type behind the surface. Notes are id-stable (<code>MidiNote</code> carries a <code>std::uint64_t id</code>), not tree-index-based, which is what makes deterministic diff-and-undo possible.</p>
+
+<p>Its thread discipline is the copy-on-write, wait-free pattern used across the DAW&rsquo;s realtime data:</p>
+
+<ul>
+<li><strong>One writer</strong> (message thread), <strong>one reader</strong> (audio thread).</li>
+<li>The note list is an immutable <code>NoteList</code> published by a <strong>raw pointer atomic swap</strong>. The UI builds a new list, <code>atomic_exchange</code>s the live pointer, and pushes the displaced pointer onto a UI-thread trash deque drained on <code>AsyncUpdater</code>.</li>
+<li>The audio thread <code>atomic_load</code>s once per block and uses that snapshot for the whole render.</li>
+</ul>
+
+
+<p>It deliberately does <strong>not</strong> use <code>std::atomic&lt;shared_ptr&gt;</code>: libstdc++ implements that with an internal spinlock, which is neither wait-free nor PI-aware on PREEMPT_RT. Raw atomic pointer swap plus deferred (epoch-gated) reclaim is wait-free for the audio reader and allocation-free for everyone except the UI edit/sweep path. <code>clone()</code> deep-copies a region with its own snapshot pointer, epoch counter, and trash deque, which is how the arrangement&rsquo;s <code>juce::Array&lt;Lane&gt;</code> undo snapshots copy regions that are otherwise non-copyable.</p>
+
+<h2 id="3-the-editor-dock">3. The editor dock</h2>
+
+<p><code>PianoRollView</code> owns the per-editor state that outlives a single region binding &ndash; the active tool, the last-used quantize/humanize/scale parameters, and the docked Q/H/S panel visibility. The grid is re-bound per region, so anything that must survive a re-bind lives on the view, not the grid.</p>
+
+<table>
+<thead>
+<tr>
+<th> Element </th>
+<th> Type </th>
+<th> Role </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Keyboard column </td>
+<td> <code>PianoRollKeyboard</code> </td>
+<td> Pitch labels + click-to-audition </td>
+</tr>
+<tr>
+<td> Note grid </td>
+<td> <code>PianoRollGrid</code> </td>
+<td> Note drawing, hit-testing, gesture dispatch </td>
+</tr>
+<tr>
+<td> Velocity lane </td>
+<td> <code>VelocityLane</code> </td>
+<td> Per-note velocity bars </td>
+</tr>
+<tr>
+<td> CC lanes </td>
+<td> <code>CcLane</code> </td>
+<td> Tabbed multi-CC controller overlay </td>
+</tr>
+<tr>
+<td> Q/H/S panel </td>
+<td> docked, 290 px </td>
+<td> Quantize / Humanize / Scale, right edge </td>
+</tr>
+</tbody>
+</table>
+
+
+<h2 id="4-tools-and-gestures">4. Tools and gestures</h2>
+
+<p>The tool palette is a radio toggle on the header, default <strong>Select</strong>. The grid&rsquo;s mouse handlers branch on <code>PianoRollView::getActiveTool()</code>:</p>
+
+<table>
+<thead>
+<tr>
+<th> Tool </th>
+<th> Behaviour </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Select </td>
+<td> Marquee select + move/resize existing notes </td>
+</tr>
+<tr>
+<td> Pencil </td>
+<td> Single-click adds one note; drag resizes it </td>
+</tr>
+<tr>
+<td> Erase </td>
+<td> Click/drag removes notes </td>
+</tr>
+<tr>
+<td> Brush </td>
+<td> Drag paints one snap-division note per visited (beat-cell, pitch), committed as a single command on mouseUp </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Note drag/move/resize is handled by <code>NoteDrag</code> (<code>note_drag.cpp</code>), which samples the pointer against the drawn note geometry so a grab tracks the cursor exactly. A gesture mutates nothing on the region until <code>mouseUp</code>, at which point the accumulated change is committed as one diff command.</p>
+
+<h2 id="5-diff-commands-and-undo">5. Diff commands and undo</h2>
+
+<p>Every edit gesture becomes a <code>MidiNoteDiffCommand</code> (<code>midi_note_diff_command.hpp</code>), a <code>juce::UndoableAction</code> modelled on Ardour&rsquo;s <code>NoteDiffCommand</code> but built on Element&rsquo;s UUID + id-stable note model. A command records three kinds of ops:</p>
+
+<table>
+<thead>
+<tr>
+<th> Op </th>
+<th> Records </th>
+<th> Undo re-creates </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> Add </td>
+<td> The new note (id pre-assigned via <code>region-&gt;nextNoteId()</code>) </td>
+<td> Removes it </td>
+</tr>
+<tr>
+<td> Remove </td>
+<td> The <strong>full</strong> note state </td>
+<td> Re-adds with the same id/pitch/velocity/channel/timing </td>
+</tr>
+<tr>
+<td> Update </td>
+<td> Before <strong>and</strong> after for a mutable-field change (move/resize/velocity) </td>
+<td> Restores &ldquo;before&rdquo; </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Commands are built empty and populated during the gesture&rsquo;s <code>mouseUp</code> commit, then handed to the <code>GuiService</code> <code>UndoManager</code>, which <code>perform()</code>s them. Region resolution is by uuid at perform/undo time, so an undo that crosses a region remove/re-add still targets the right region (and is a safe no-op if the region can&rsquo;t be resolved). An <code>onApplied</code> hook fires at the end of <em>both</em> <code>perform()</code> and <code>undo()</code> so the session <code>ValueTree</code> and view-side caches stay in sync in both directions &ndash; without it, Ctrl+Z would leave stale notes in the session XML.</p>
+
+<h2 id="6-velocity-and-cc-lanes">6. Velocity and CC lanes</h2>
+
+<p>Below the grid sit controller lanes that share the grid&rsquo;s horizontal scroll and zoom:</p>
+
+<ul>
+<li><strong>Velocity lane</strong> (<code>VelocityLane</code>) draws one bar per note; dragging edits velocity, which records <code>Update</code> ops through the same diff-command path.</li>
+<li><strong>CC lanes</strong> (<code>CcLane</code>) are a tabbed multi-CC overlay &ndash; clip-local MIDI CC automation stored per region as a <code>MidiCcLane</code> (which reuses the same <code>AutomationPoint</code> curve primitive as timeline automation). Points are shaped with the unified 2D Bezier handle, identical to the volume envelope and timeline overlay (see <a href="automation.gen.html">Automation</a>). At playback, <code>MidiPlayerNode</code> emits the CC values sample-accurately alongside the notes.</li>
+</ul>
+
+
+<p>The lanes track the live playhead surgically: while transport rolls, <code>updateControllerLanePlayheads()</code> repaints only the old and new playhead strips, not the whole lane.</p>
+
+<h2 id="7-quantize-humanize-scale">7. Quantize, humanize, scale</h2>
+
+<p>The Q/H/S tools live in a docked panel (toggled per-tab by the toolbar buttons or Ctrl+Q) and operate on the shared quantize primitives in <code>src/dsp</code> (<code>quantize_ops</code>, <code>quantize_options</code>). Last-used settings live on the view and survive dialog open/close, so Ctrl+Q and the toolbar buttons replay the user&rsquo;s most recent parameters (falling back to defaults derived from the current snap division until the user has adjusted them).</p>
+
+<p>The key detail is <strong>live preview parity</strong>: the preview highlight is driven from <code>MidiNoteDiffCommand::touchedIds()</code> &ndash; the exact same diff the Apply path will commit. So what the user sees highlighted before applying is precisely the set of notes Apply writes, with no semantic drift between preview and commit.</p>
+
+<h2 id="8-rendering">8. Rendering</h2>
+
+<p>The piano-roll is on the DAW&rsquo;s rendering hot path when transport rolls, so it uses the same surgical-repaint strategy as the arrangement: the playhead is drawn opaque and updated by repainting only the old/new strips, driven off a <code>VBlankAttachment</code> rather than a 30 Hz timer. The static content &ndash; background, grid, ruler, and the note layer &ndash; is cached to an image and blitted, keyed off the region snapshot pointer, since a note drag mutates nothing until <code>mouseUp</code>. The velocity and CC lanes are <em>not</em> image-cached (they mutate live on every mouse-move) but are opaque, surgically repainted, and culled to the viewport.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

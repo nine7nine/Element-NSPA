@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Session View</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--session-view">Lulada &ndash; Session View</h1>
+
+<p>This page documents the Session View: an Ableton/Bitwig-style clip-launch grid where each column is a graph source node, each scene is a row, and clicking a clip launches it through the same sample-accurate audio-thread scheduler the arrangement uses.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-the-grid-model">The grid model</a></li>
+<li><a href="#2-clips-scenes-columns">Clips, scenes, columns</a></li>
+<li><a href="#3-launch-quantisation">Launch quantisation</a></li>
+<li><a href="#4-launch-state-machine">Launch state machine</a></li>
+<li><a href="#5-follow-actions">Follow actions</a></li>
+<li><a href="#6-scenes-and-the-master-column">Scenes and the master column</a></li>
+<li><a href="#7-reconciling-ui-to-engine">Reconciling UI to engine</a></li>
+<li><a href="#8-persistence-and-undo">Persistence and undo</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-the-grid-model">1. The grid model</h2>
+
+<p><code>SessionView</code> (<code>src/ui/sessionview.hpp</code>) is a <code>ContentView</code> laid out Bitwig-style: column headers across the top, scene labels down the left, and a sparse grid of clips in between. Each <strong>column maps 1:1 to a source node</strong> in the active graph, and each <strong>scene (row)</strong> holds at most one clip per column.</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .hdr { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .cell{ fill: #1f2535; stroke: #3b4261; stroke-width: 1; }
+    .clip{ fill: #2a3550; stroke: #7aa2f7; stroke-width: 1.2; }
+    .clipg{ fill: #23402a; stroke: #9ece6a; stroke-width: 1.2; }
+    .scene{ fill: #2a2438; stroke: #bb9af7; stroke-width: 1; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-blu { fill: #7aa2f7; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-pur { fill: #bb9af7; font-size: 10px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .title { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="880" height="320" class="bg" rx="6"/>
+  <text x="440" y="24" text-anchor="middle" class="title">columns = source nodes,  scenes = rows,  clips = sparse cells</text>
+
+  <rect x="30" y="44" width="120" height="34" class="hdr" rx="6"/>
+  <text x="90" y="65" text-anchor="middle" class="lbl-mut">scene</text>
+  <rect x="160" y="44" width="150" height="34" class="hdr" rx="6"/>
+  <text x="235" y="60" text-anchor="middle" class="lbl-blu">Tracker col</text>
+  <text x="235" y="72" text-anchor="middle" class="lbl-mut">TrackerNode</text>
+  <rect x="320" y="44" width="150" height="34" class="hdr" rx="6"/>
+  <text x="395" y="60" text-anchor="middle" class="lbl-grn" fill="#9ece6a" font-weight="bold">MIDI col</text>
+  <text x="395" y="72" text-anchor="middle" class="lbl-mut">MidiPlayerNode</text>
+  <rect x="480" y="44" width="150" height="34" class="hdr" rx="6"/>
+  <text x="555" y="60" text-anchor="middle" class="lbl-blu">Tracker col</text>
+  <text x="555" y="72" text-anchor="middle" class="lbl-mut">TrackerNode</text>
+  <rect x="640" y="44" width="150" height="34" class="hdr" rx="6"/>
+  <text x="715" y="65" text-anchor="middle" class="lbl-pur">master</text>
+
+  <!-- scene 1 -->
+  <rect x="30" y="86" width="120" height="40" class="scene" rx="6"/>
+  <text x="90" y="110" text-anchor="middle" class="lbl-sm">Scene A</text>
+  <rect x="160" y="86" width="150" height="40" class="clip" rx="6"/>
+  <text x="235" y="110" text-anchor="middle" class="lbl-sm">pattern 1</text>
+  <rect x="320" y="86" width="150" height="40" class="clipg" rx="6"/>
+  <text x="395" y="110" text-anchor="middle" class="lbl-sm">midi clip</text>
+  <rect x="480" y="86" width="150" height="40" class="cell" rx="6"/>
+  <rect x="640" y="86" width="150" height="40" class="scene" rx="6"/>
+  <text x="715" y="110" text-anchor="middle" class="lbl-mut">120 bpm 4/4</text>
+
+  <!-- scene 2 -->
+  <rect x="30" y="130" width="120" height="40" class="scene" rx="6"/>
+  <text x="90" y="154" text-anchor="middle" class="lbl-sm">Scene B</text>
+  <rect x="160" y="130" width="150" height="40" class="cell" rx="6"/>
+  <rect x="320" y="130" width="150" height="40" class="clipg" rx="6"/>
+  <text x="395" y="154" text-anchor="middle" class="lbl-sm">midi clip</text>
+  <rect x="480" y="130" width="150" height="40" class="clip" rx="6"/>
+  <text x="555" y="154" text-anchor="middle" class="lbl-sm">pattern 3</text>
+  <rect x="640" y="130" width="150" height="40" class="scene" rx="6"/>
+  <text x="715" y="154" text-anchor="middle" class="lbl-mut">140 bpm</text>
+
+  <!-- scene 3 -->
+  <rect x="30" y="174" width="120" height="40" class="scene" rx="6"/>
+  <text x="90" y="198" text-anchor="middle" class="lbl-sm">Scene C</text>
+  <rect x="160" y="174" width="150" height="40" class="clip" rx="6"/>
+  <text x="235" y="198" text-anchor="middle" class="lbl-sm">pattern 2</text>
+  <rect x="320" y="174" width="150" height="40" class="cell" rx="6"/>
+  <rect x="480" y="174" width="150" height="40" class="clip" rx="6"/>
+  <text x="555" y="198" text-anchor="middle" class="lbl-sm">pattern 4</text>
+  <rect x="640" y="174" width="150" height="40" class="scene" rx="6"/>
+
+  <text x="30" y="248" class="lbl-sm">Click a clip -> schedulePlaying on its source node (sample-accurate at the boundary)</text>
+  <text x="30" y="268" class="lbl-sm">Click a scene -> bang every clip on that row; apply the scene's tempo / sig overrides</text>
+  <text x="30" y="288" class="lbl-mut">A column is one kind only: Tracker (vht sequences) or MIDI (per-clip region).</text>
+</svg>
+</div>
+
+
+<h2 id="2-clips-scenes-columns">2. Clips, scenes, columns</h2>
+
+<p>A clip is polymorphic over its backing node kind (<code>ClipKind</code>):</p>
+
+<table>
+<thead>
+<tr>
+<th> Kind </th>
+<th> Backing </th>
+<th> Bound by </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>Tracker</code> </td>
+<td> one vht sequence inside a <code>TrackerNode</code> </td>
+<td> <code>trackerNodeId</code> + <code>sequenceIdx</code> </td>
+</tr>
+<tr>
+<td> <code>Midi</code> </td>
+<td> a <code>MidiNoteRegion</code> owned by a <code>MidiPlayerNode</code> </td>
+<td> <code>midiPlayerNodeId</code> + <code>midiSourceId</code> </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>MIDI clips own their region per-clip (cloned, <strong>not</strong> shared with arrangement regions), so editing a session MIDI clip in the piano-roll affects only that clip. Node bindings are stored as graph node ids and resolved against the live graph, so a clip survives session save/load even as node pointers change.</p>
+
+<p>A <code>SessionColumn</code> is locked to one kind at creation &ndash; Tracker columns bind a <code>TrackerNode</code>, MIDI columns bind a <code>MidiPlayerNode</code>; there are no mixed-kind columns (one clip-source per column). <code>rescanColumns()</code> walks the active graph on activate and on graph-topology changes, rebuilding the column list from the current source nodes while preserving user-authored columns and dropping orphans.</p>
+
+<h2 id="3-launch-quantisation">3. Launch quantisation</h2>
+
+<p>Each clip carries a <code>LaunchQuant</code> that decides <em>when</em> a bang takes effect relative to the transport:</p>
+
+<table>
+<thead>
+<tr>
+<th> <code>LaunchQuant</code> </th>
+<th> Fires at </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>Off</code> </td>
+<td> Immediately (next render block) </td>
+</tr>
+<tr>
+<td> <code>Beat</code> </td>
+<td> Next beat </td>
+</tr>
+<tr>
+<td> <code>Bar</code> </td>
+<td> Next bar (<code>beatsPerBar</code>) &ndash; the default </td>
+</tr>
+<tr>
+<td> <code>TwoBars</code> </td>
+<td> Next 2-bar boundary </td>
+</tr>
+<tr>
+<td> <code>FourBars</code> </td>
+<td> Next 4-bar boundary </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The view converts the quant into a transport beat target and passes it to the source node&rsquo;s scheduler (<code>TrackerNode::schedulePlaying</code> / <code>MidiPlayerNode::schedulePlayingClip</code>) &ndash; the same lock-free SPSC FIFO the arrangement uses. All clips targeting the same beat flip together with zero inter-clip skew (see <a href="tracker.gen.html#6-the-launch-scheduler">Tracker</a>).</p>
+
+<h2 id="4-launch-state-machine">4. Launch state machine</h2>
+
+<p>Each clip&rsquo;s visible state is an atomic <code>LiveState</code> driven by the message thread on a bang and reconciled toward engine truth by the UI timer:</p>
+
+<pre><code class="code-block">
+Stopped  --bang--&gt;  WaitingToStart  --(audio thread flips seq-&gt;playing
+                                         at the quant boundary)--&gt;  Playing
+Playing  --bang--&gt;  WaitingToStop   --(audio thread clears playing)--&gt;  Stopped
+</code></pre>
+
+
+<p><code>WaitingToStart</code> / <code>WaitingToStop</code> are the &ldquo;queued&rdquo; states you see blinking until the boundary arrives. The state is atomic because the message thread writes it on the bang and reads it on the 30 Hz timer while the audio thread independently flips the engine flag.</p>
+
+<h2 id="5-follow-actions">5. Follow actions</h2>
+
+<p>When a playing clip&rsquo;s sequence wraps past its end, its <code>FollowAction</code> decides what happens next &ndash; detected via the tracker node&rsquo;s <code>sequenceWrappedSinceLastQuery</code> edge-trigger:</p>
+
+<table>
+<thead>
+<tr>
+<th> <code>FollowAction</code> </th>
+<th> Effect on wrap </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>None</code> </td>
+<td> Keep looping (vht loops naturally) &ndash; the default </td>
+</tr>
+<tr>
+<td> <code>Stop</code> </td>
+<td> Schedule an immediate stop </td>
+</tr>
+<tr>
+<td> <code>RestartClip</code> </td>
+<td> Re-launch the same clip from row 0 </td>
+</tr>
+<tr>
+<td> <code>NextClip</code> </td>
+<td> Bang the clip on the next-greater scene row in the same column (else <code>Stop</code>) </td>
+</tr>
+<tr>
+<td> <code>FirstClip</code> </td>
+<td> Bang the lowest scene-row clip in the same column </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>This gives simple generative chaining without a separate arrangement &ndash; clips can hand off down a column or ping-pong on their own.</p>
+
+<h2 id="6-scenes-and-the-master-column">6. Scenes and the master column</h2>
+
+<p>A scene bang (<code>bangScene</code>) launches every clip on that row at once. Scenes also carry Ableton-style per-scene <strong>transport overrides</strong>, shown in a master column and applied when the scene launches:</p>
+
+<ul>
+<li><code>tempoOverride</code> &ndash; bpm, sentinel <code>-1</code> means &ldquo;no override; inherit current&rdquo;.</li>
+<li><code>beatsPerBar</code> / <code>beatDivisor</code> &ndash; time signature, sentinel <code>0</code> means &ldquo;no override&rdquo;.</li>
+</ul>
+
+
+<p>So a scene can be a tempo/signature change as well as a set of clips, which is how the Session View doubles as a loose arrangement device.</p>
+
+<h2 id="7-reconciling-ui-to-engine">7. Reconciling UI to engine</h2>
+
+<p>The message thread never assumes a launch happened; it <em>requests</em> one and then watches for the audio thread to make it real. On each timer tick the view reads each clip&rsquo;s atomic <code>LiveState</code> and the engine&rsquo;s actual playing/position, and repaints only what changed (diff-gated via <code>lastDrawnPlaying</code> / <code>lastDrawnPosRow</code>). This keeps the grid honest even though the flip is sample-accurate and happens asynchronously on the audio thread. <code>stopAllClips()</code> and the per-column force-stop path (&ldquo;belt and suspenders&rdquo;) ensure no sequence is left playing when the user clears the grid or the graph changes.</p>
+
+<h2 id="8-persistence-and-undo">8. Persistence and undo</h2>
+
+<p>Session View state (clips, scenes, columns) is serialised into the session <code>ValueTree</code>. Undo is <strong>snapshot-based</strong>: <code>writeToSession</code> generates a <code>SessionViewSnapshotAction</code>, and the global <code>GuiService</code> <code>UndoManager</code> calls <code>applySessionSnapshot(snap)</code> to swap the stored subtree back in, re-read it to rebuild the in-memory <code>clips_</code> / <code>scenes_</code> / <code>columns_</code> arrays, and repaint. An internal <code>applyingUndoAction_</code> guard stops the re-read from recursively pushing another action. This is a coarser granularity than the piano-roll&rsquo;s per-gesture diff commands, which suits the Session View&rsquo;s larger structural edits (add/remove clip, move, re-scene).</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>

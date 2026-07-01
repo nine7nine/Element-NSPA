@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulada -- Automation</title>
+<style>
+  :root {
+    --bg: #1a1b26; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
+    --surface: #24283b; --border: #3b4261; --muted: #8c92b3;
+    --purple: #bb9af7; --orange: #ff9e64; --cyan: #7dcfff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--bg); color: var(--fg);
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+    line-height: 1.7;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+  .page-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(36, 40, 59, 0.9);
+    color: var(--accent);
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+  .page-nav a:hover {
+    background: var(--surface);
+    color: var(--cyan);
+    text-decoration: none;
+  }
+  h1 { color: var(--accent); font-size: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  h2 { color: var(--accent); font-size: 1.2rem; margin: 2rem 0 0.75rem;
+       border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { color: var(--yellow); font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+  h4 { color: var(--cyan); font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+  p, li { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 0.75rem 0 1rem; font-size: 0.8rem;
+  }
+  th, td {
+    padding: 0.4rem 0.75rem; text-align: left;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  code {
+    background: var(--surface); padding: 0.15rem 0.4rem;
+    border-radius: 3px; font-size: 0.82rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; margin: 0.75rem 0 1rem;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    display: block; background: transparent; padding: 0;
+    font-size: 0.8rem; color: inherit;
+  }
+  pre code.hljs,
+  code.hljs {
+    background: transparent;
+    padding: 0;
+  }
+  blockquote {
+    background: var(--surface); border-left: 3px solid var(--accent);
+    padding: 0.75rem 1rem; margin: 1rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+  blockquote strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  strong { color: var(--fg); }
+  em { color: var(--muted); font-style: italic; }
+  .diagram-container {
+    display: flex; justify-content: center;
+    margin: 1.25rem auto 1.5rem; padding: 0.75rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow-x: auto;
+  }
+  .diagram-container svg {
+    display: block;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    margin: 0 auto;
+    flex: 0 0 auto;
+  }
+  figure.screenshot {
+    margin: 1.25rem auto 1.5rem;
+    padding: 0.6rem;
+    background: rgba(36, 40, 59, 0.55);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  figure.screenshot img {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  figure.screenshot figcaption {
+    color: var(--muted); font-size: 0.78rem;
+    text-align: center; margin-top: 0.5rem;
+  }
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/tokyo-night-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</head><body>
+<div class="page-nav"><a href="index.html">Docs Home</a></div>
+<h1 id="lulada--automation">Lulada &ndash; Automation</h1>
+
+<p>This page documents the automation subsystem: the wait-free, song-owned engine that applies parameter curves on the audio thread, the three kinds of target it can drive, the unified 2D-Bezier curve model shared with the volume envelope, and how the overlay UI presents it on both the arrangement and the piano-roll.</p>
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+<li><a href="#1-song-owned-engine-view-owned-presentation">Song-owned engine, view-owned presentation</a></li>
+<li><a href="#2-tracks-regions-modes">Tracks, regions, modes</a></li>
+<li><a href="#3-targets">Targets</a></li>
+<li><a href="#4-the-wait-free-engine">The wait-free engine</a></li>
+<li><a href="#5-the-per-block-apply">The per-block apply</a></li>
+<li><a href="#6-mapping-engine-arbitration">Mapping-engine arbitration</a></li>
+<li><a href="#7-the-curve-model">The curve model</a></li>
+<li><a href="#8-touch-record">Touch record</a></li>
+<li><a href="#9-the-overlay-ui">The overlay UI</a></li>
+<li><a href="#10-persistence">Persistence</a></li>
+</ol>
+
+
+<hr />
+
+<h2 id="1-song-owned-engine-view-owned-presentation">1. Song-owned engine, view-owned presentation</h2>
+
+<p>Automation is split into two domains, and keeping them apart is the central design decision:</p>
+
+<ul>
+<li><strong>Song domain</strong> &ndash; the <code>AutomationEngine</code> owns the <code>AutomationTrack</code>s: their curve data, target keys, and modes. This is what <em>plays</em>, regardless of which view is open. It persists under <code>tags::automationTracks</code>.</li>
+<li><strong>View domain</strong> &ndash; an <code>AutomationBinding</code> (<code>services/timeline/automation_binding.hpp</code>) records only <em>where and how</em> the arrangement draws a track (its lane, colour, height, overlay-vs-dedicated). It references the engine track by <code>trackId</code> and persists as a peer list under <code>tags::arrangement</code>.</li>
+</ul>
+
+
+<p>So timeline automation plays whether or not the arrangement view is active, and the presentation can change (overlay under a lane, or its own dedicated row) without touching the curve data. A binding is an overlay when <code>ownerLaneId</code> is set and a dedicated lane when it is null.</p>
+
+<h2 id="2-tracks-regions-modes">2. Tracks, regions, modes</h2>
+
+<p>An <code>AutomationTrack</code> (<code>src/dsp/automation</code>) holds a target key and a set of <code>AutomationRegion</code>s (curve segments placed on the timeline). Its <code>AutomationMode</code> mirrors Ardour/Zrythm:</p>
+
+<table>
+<thead>
+<tr>
+<th> Mode </th>
+<th> Engine behaviour </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>Off</code> </td>
+<td> Track ignored entirely &ndash; no events, mute table not set </td>
+</tr>
+<tr>
+<td> <code>Read</code> </td>
+<td> Sample the active region each block, dispatch through the target, set the mute table </td>
+</tr>
+<tr>
+<td> <code>Record</code> </td>
+<td> Drain the touch-record FIFO into a soft buffer; UI materialises it on touch release </td>
+</tr>
+</tbody>
+</table>
+
+
+<p><code>Read</code> and <code>Record</code> coexist: parts of the timeline not being touch-overwritten keep playing back while the touched region records. Record mode is further <code>Touch</code> (ends on knob release) or <code>Latch</code> (records until transport stop).</p>
+
+<h2 id="3-targets">3. Targets</h2>
+
+<p>An <code>AutomationTrack</code>&rsquo;s persistent target <em>key</em> resolves to a live <code>AutomationTarget</code> (<code>services/automation/automation_target.hpp</code>) &ndash; the actual writable destination on the graph. There are three kinds:</p>
+
+<table>
+<thead>
+<tr>
+<th> Kind </th>
+<th> Destination </th>
+<th> Timing </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>PluginParam</code> </td>
+<td> a <code>juce::AudioProcessorParameter</code> on a hosted VST/CLAP/AU </td>
+<td> coarse (one <code>setValue</code> per block) </td>
+</tr>
+<tr>
+<td> <code>NodeParam</code> </td>
+<td> an <code>element::Parameter</code> on an internal node (Tracker BPM, Sampler mix, clip gain, &hellip;) </td>
+<td> coarse; sample-accurate is the node&rsquo;s responsibility </td>
+</tr>
+<tr>
+<td> <code>MidiCc</code> </td>
+<td> a <code>(channel, ccNumber)</code> pair </td>
+<td> sample-accurate by construction </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>The engine rebuilds targets whenever graph topology changes (nodes added/removed, plugins re-scanned). Plugin/node pointers are <strong>raw non-owning</strong>; the engine invalidates a target (<code>kind = Invalid</code>) <em>before</em> the backing object is destroyed, on topology callbacks, so the audio thread never dereferences a dangling target.</p>
+
+<h2 id="4-the-wait-free-engine">4. The wait-free engine</h2>
+
+<p><code>AutomationEngine</code> (<code>services/automation/automation_engine.hpp</code>) runs one instance per graph and is engineered so <strong>every audio-thread path is wait-free</strong> &ndash; no locks, no allocations. All UI-side mutation uses a leaked-pointer + epoch-gated trash-bin pattern:</p>
+
+<div class="diagram-container">
+<svg width="100%" viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" class="diagram-svg" preserveAspectRatio="xMidYMid meet">
+  <style>
+    .bg  { fill: #1a1b26; }
+    .grn { fill: #1a2a1a; stroke: #9ece6a; stroke-width: 1.5; }
+    .hot { fill: #2a2438; stroke: #e0af68; stroke-width: 1.5; }
+    .box { fill: #24283b; stroke: #3b4261; stroke-width: 1; }
+    .lbl-sm  { fill: #c0caf5; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-mut { fill: #a9b1d6; font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+    .lbl-grn { fill: #9ece6a; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .lbl-yel { fill: #e0af68; font-size: 11px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+    .ln  { stroke: #7dcfff; stroke-width: 1.5; fill: none; }
+    .title { fill: #7aa2f7; font-size: 13px; font-weight: bold; font-family: 'JetBrains Mono', monospace; }
+  </style>
+  <rect x="0" y="0" width="900" height="300" class="bg" rx="6"/>
+  <text x="450" y="24" text-anchor="middle" class="title">Leaked-pointer + epoch-gated reclaim -- wait-free for the audio reader</text>
+
+  <rect x="30" y="44" width="330" height="110" class="grn" rx="6"/>
+  <text x="48" y="64" class="lbl-grn">Message thread (UI / session load)</text>
+  <text x="48" y="84" class="lbl-mut">addTrack / removeTrack / bindXxx / unbindTarget</text>
+  <text x="48" y="100" class="lbl-mut">builds a NEW track-pointer snapshot,</text>
+  <text x="48" y="114" class="lbl-mut">atomic-stores liveTracks_, old snapshot -&gt; trash</text>
+  <text x="48" y="134" class="lbl-mut">sweepTrash() reclaims once audioEpoch_ passes</text>
+
+  <rect x="540" y="44" width="330" height="110" class="hot" rx="6"/>
+  <text x="558" y="64" class="lbl-yel">Audio thread (applyForBlock)</text>
+  <text x="558" y="84" class="lbl-mut">1. fetch_add audioEpoch_ (gates reclaim)</text>
+  <text x="558" y="100" class="lbl-mut">2. atomic_load liveTracks_ snapshot</text>
+  <text x="558" y="114" class="lbl-mut">3. per track: advance epoch, sample region,</text>
+  <text x="558" y="128" class="lbl-mut">   dispatch via bound target</text>
+
+  <line stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" x1="360" y1="99" x2="540" y2="99" class="ln"/>
+
+  <rect x="30" y="180" width="840" height="90" class="box" rx="6"/>
+  <text x="50" y="202" class="lbl-sm">Empty state (zero tracks) = ~3 atomic ops: one load + one fetch_add + one null check</text>
+  <text x="50" y="222" class="lbl-mut">Retired targets + removed tracks + snapshots carry the epoch they were trashed at</text>
+  <text x="50" y="238" class="lbl-mut">sweepTrash() frees them only after the audio thread advances past that epoch -- no UAF</text>
+  <text x="50" y="254" class="lbl-mut">Why not atomic&lt;shared_ptr&gt;: libstdc++ uses a spinlock -- not wait-free / PI-aware</text>
+</svg>
+</div>
+
+
+<p>Target rebinds work the same way: a freshly-built <code>AutomationTarget</code> is published via atomic store onto the track, and the old target moves to <code>retiredTargets_</code> for epoch-gated reclaim &ndash; so the audio thread can hold a target pointer across a block boundary without use-after-free.</p>
+
+<h2 id="5-the-per-block-apply">5. The per-block apply</h2>
+
+<p><code>applyForBlock(currentBeats, beatsPerBlock, numSamples, sampleRate, outMidi)</code> is the single audio-thread entry point, called from the graph render with the block&rsquo;s beat range:</p>
+
+<ol>
+<li>Bump the per-engine audio epoch (gates trash reclaim).</li>
+<li>Snapshot-load the live track-pointer vector.</li>
+<li>For each track: advance its epoch, update its mute slot, and &ndash; if <code>mode == Read</code>, a target is bound, and an active region covers the playhead &ndash; sample the region and dispatch via the target.</li>
+</ol>
+
+
+<p>Emission granularity differs by target kind. <strong>MIDI CC</strong> targets are sampled at a sub-block stride (<code>kAutomationSubBlockStride = 64</code> samples), giving ~16 sample-accurate <code>controllerEvent</code>s per block at 48 kHz/1024 &ndash; well under any MIDI bandwidth ceiling. <strong>Plugin and node params</strong> are written coarse (one <code>setValue</code> at frame 0 per block) in the current phase; sample-accurate plugin emission is deferred. Passing <code>beatsPerBlock = 0</code> (or <code>bpm &lt;= 0</code>) disables sample-accurate MIDI emission and falls back to a single write at offset 0 &ndash; useful for test benches with no transport.</p>
+
+<h2 id="6-mapping-engine-arbitration">6. Mapping-engine arbitration</h2>
+
+<p>Automation and MIDI-CC mapping can target the same parameter, so they must not fight. The engine maintains a fixed table of <strong>mute slots</strong> (<code>kMaxMuteSlots = 256</code>, atomic bools): when a track is actively driving a parameter in <code>Read</code> mode, its mute slot is set, and the <code>MappingEngine</code>&rsquo;s MIDI handlers check <code>isMappingMuted(slot)</code> before writing &ndash; so the automation curve wins.</p>
+
+<p>The lookup is tiered for the MIDI thread&rsquo;s benefit:</p>
+
+<ul>
+<li><strong>Fast path</strong> &ndash; an atomic <code>activeTrackCount()</code> load short-circuits to &ldquo;not muted&rdquo; when zero tracks are bound (the common &ldquo;no automation configured&rdquo; case), so MIDI handlers skip the lock entirely.</li>
+<li><strong>Slow path</strong> &ndash; a brief <code>juce::CriticalSection</code> (PI-correct on PREEMPT_RT) guards an O(N) walk of the bound tracks. The same lock is taken by UI-thread bind/unbind, so the two tolerate racing. <code>drainPendingLookups()</code> lets the engine owner flush in-flight MIDI-thread lookups during teardown, after the <code>MappingEngine</code>&rsquo;s engine pointer is cleared, guaranteeing no handler is mid-dereference when the engine is destroyed.</li>
+</ul>
+
+
+<p>The audio thread itself never takes this lock &ndash; it consults mute slots by index with a single atomic load.</p>
+
+<h2 id="7-the-curve-model">7. The curve model</h2>
+
+<p>Every automation segment uses <strong>one</strong> curve primitive, <code>CurveOptions</code> (<code>src/dsp/automation/curve.hpp</code>), the same 2D draggable-handle Bezier the audio-clip volume envelope uses. This unification replaced an older algorithmic 1D &ldquo;curviness&rdquo; family so that the timeline overlay, the piano-roll CC lanes, and the volume envelope all bend curves identically &ndash; drag a handle in 2D.</p>
+
+<table>
+<thead>
+<tr>
+<th> Field </th>
+<th> Meaning </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> <code>offsetT</code> </td>
+<td> Normalised X of the bend handle within the segment, clamped <code>[0.25, 0.75]</code> (outside, the Bezier&rsquo;s <code>x(u)</code> goes non-monotonic) </td>
+</tr>
+<tr>
+<td> <code>offsetV</code> </td>
+<td> Normalised value offset of the handle from the chord midpoint &ndash; positive bulges up, negative down, regardless of segment direction </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Defaults <code>(0.5, 0.0)</code> put the handle on the straight chord = linear. <code>evaluateSegment(x, v0, v1, opts)</code> returns the normalised value: with default handle it is the straight lerp <code>v0..v1</code>; bent, it evaluates the value-space quadratic Bezier passing through <code>(offsetT, 0.5*(v0+v1) + offsetV)</code> at <code>u = 0.5</code> &ndash; identical to the volume envelope&rsquo;s construction. It is POD/trivially-copyable so vectors of points stay cheap.</p>
+
+<h2 id="8-touch-record">8. Touch record</h2>
+
+<p>In <code>Record</code> mode, UI/control-thread parameter touches are pushed into the track&rsquo;s <code>writeFifo_</code> as <code>AutomationWriteEvent</code>s (POD, so <code>AbstractFifo</code> storage needs no per-slot construction). The audio thread drains the FIFO at block start into a soft buffer; on touch release the UI materialises that buffer into a hard <code>AutomationRegion</code> snapshot. <code>Touch</code> ends recording on release; <code>Latch</code> keeps recording until transport stop.</p>
+
+<h2 id="9-the-overlay-ui">9. The overlay UI</h2>
+
+<p>Automation is edited on the same 2D-Bezier curve surface on both authoring views:</p>
+
+<ul>
+<li><strong>Arrangement</strong> &ndash; automation renders as a <strong>superimposed overlay</strong> under a lane (not stacked lanes), with a chip rail listing the lane&rsquo;s bindings; each binding gets its own colour and the overlay area is vertically resizable. Editing is gated on a dedicated <strong>Env tool</strong> so envelope/automation point edits don&rsquo;t collide with region gestures. Points support add / move / delete / type and 2D handle bends, snapping to the cursor on move.</li>
+<li><strong>Piano-roll</strong> &ndash; the same curve editor drives clip-local MIDI CC lanes as a tabbed multi-CC overlay.</li>
+</ul>
+
+
+<p>The target picker is <strong>graph-wide</strong> (any node&rsquo;s parameter, grouped per node), because a modular DAW has no automatic track-to-parameter mapping &ndash; you bind an automation track to any parameter anywhere in the graph. Timeline automation is song-owned and absolute (plays against the transport tempo map); clip-local automation is local and loops with its clip &ndash; same engine primitives, different ownership.</p>
+
+<h2 id="10-persistence">10. Persistence</h2>
+
+<p><code>saveToValueTree</code> writes all owned tracks to a <code>tags::automationTracks</code> child (no child when zero tracks &ndash; legacy sessions load as if no automation existed). <code>loadFromValueTree</code> reconstructs the tracks but deliberately does <strong>not</strong> re-bind targets: resolving each track&rsquo;s target key to a live <code>AutomationTarget</code> (and allocating its mute slot) happens in a separate session-load hook after the graph exists, via the <code>bindPluginParam</code> / <code>bindNodeParam</code> / <code>bindMidiCc</code> calls. The presentation <code>AutomationBinding</code>s persist separately under <code>tags::arrangement</code>, referencing tracks by <code>trackId</code>.</p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("pre code").forEach(function (block) {
+    hljs.highlightElement(block);
+  });
+});
+</script>
+</body></html>
