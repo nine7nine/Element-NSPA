@@ -49,12 +49,28 @@ both a clip-launcher and a linear timeline.
   sub-graphs, embed plugin UIs, Lua scripting, multi-undo
 
 ### Documentation
-Architecture and technical reference for each subsystem lives in [`docs/`](./docs)
-and is published as GitHub Pages at
-[nine7nine.github.io/Lulada](https://nine7nine.github.io/Lulada/) (start at
-`docs/index.html`). It covers the winelib runtime, Wayland embedding, the graph
-engine, and every DAW surface (tracker, piano-roll, session view, arrangement,
-automation, sampler).
+Full architecture and technical reference lives in [`docs/`](./docs) and is published
+as GitHub Pages at **[nine7nine.github.io/Lulada](https://nine7nine.github.io/Lulada/)**.
+The published pages include the hand-authored SVG diagrams; the source `.md` files below
+render on GitHub too.
+
+**Design &amp; internals** &mdash;
+[Architecture](./docs/architecture.md) ·
+[Winelib Runtime](./docs/winelib-runtime.md) ·
+[JUCE-NSPA](./docs/juce-nspa.md) ·
+[Threading &amp; RT Safety](./docs/threading-rt-safety.md) ·
+[Wayland Embedding](./docs/wayland-embedding.md) ·
+[Graph Engine](./docs/graph-engine.md)
+
+**DAW surfaces** &mdash;
+[Tracker](./docs/tracker.md) ·
+[Piano-roll](./docs/pianoroll.md) ·
+[Session View](./docs/session-view.md) ·
+[Arrangement &amp; Timeline](./docs/arrangement-timeline.md) ·
+[Automation](./docs/automation.md) ·
+[Sampler](./docs/sampler.md)
+
+**Build** &mdash; [Building &amp; Packaging](./docs/building-packaging.md)
 
 ### Building
 Lulada builds against Wine-NSPA (winelib), not upstream Element's standard CMake
